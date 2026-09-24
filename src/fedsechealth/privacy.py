@@ -8,9 +8,11 @@ when a DP client sends an update.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import torch
+from opacus.accountants import RDPAccountant
 from opacus.accountants.utils import get_noise_multiplier
 from torch import nn
 
@@ -34,6 +36,23 @@ def noise_multiplier_for(
         steps=steps,
         accountant="rdp",
     )
+
+
+RDP_ORDERS = (
+    [1 + x / 10.0 for x in range(1, 100)] + list(range(12, 64)) + [2**k for k in range(6, 16)]
+)
+
+
+def epsilon_for(noise_multiplier: float, sample_rate: float, steps: int, delta: float) -> float:
+    """(epsilon, delta)-DP guarantee of DP-SGD with a given noise multiplier (RDP accountant)."""
+    if noise_multiplier <= 0:
+        return float("inf")
+    acc = RDPAccountant()
+    acc.history = [(noise_multiplier, sample_rate, steps)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        eps, _ = acc.get_privacy_spent(delta=delta, alphas=RDP_ORDERS)
+    return float(eps)
 
 
 def per_sample_gradients(
