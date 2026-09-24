@@ -35,13 +35,59 @@ label-skewed data (Dirichlet α = 0.3). Mean ± std over 5 seeds:
 single patient is enough for the server to recover all 30 clinical features and
 the diagnosis:
 
-RECONSTRUCTION_TABLE
+| Feature | Real patient | Reconstructed (no DP) | Reconstructed (DP, ε=5) |
+|---|---:|---:|---:|
+| diagnosis | malignant | malignant | benign |
+| mean radius | 15.100 | 15.100 | 6.877 |
+| mean texture | 22.020 | 22.020 | 11.097 |
+| mean perimeter | 97.260 | 97.260 | 194.077 |
+| mean area | 712.800 | 712.802 | 1651.659 |
+| mean smoothness | 0.091 | 0.091 | 0.030 |
+| mean compactness | 0.071 | 0.071 | 0.480 |
+
+*Patient from hospital 0, iDLG attack on a freshly initialised model. First 6 of 30 features shown.*
 
 **3. Differential privacy breaks the attack at a small accuracy cost.**
 
 <p align="center"><img src="docs/figures/tradeoff_iid.png" width="620"></p>
 
-TRADEOFF_TABLE
+| Privacy budget ε | Accuracy, 3 hospitals IID | Accuracy, 5 hospitals non-IID | Analytic | iDLG | DLG |
+|---|---|---|---|---|---|
+| 0.5 | 0.900 ± 0.023 | 0.775 ± 0.078 | 0% | 0% | 0% |
+| 1 | 0.954 ± 0.007 | 0.879 ± 0.029 | 0% | 0% | 0% |
+| 2 | 0.960 ± 0.015 | 0.947 ± 0.021 | 0% | 0% | 0% |
+| 5 | 0.965 ± 0.006 | 0.965 ± 0.006 | 0% | 0% | 0% |
+| 10 | 0.967 ± 0.009 | 0.967 ± 0.007 | 0% | 0% | 0% |
+| 50 | 0.968 ± 0.007 | 0.965 ± 0.008 | 0% | 0% | 0% |
+| ∞ (no DP) | 0.975 ± 0.010 | 0.975 ± 0.007 | 100% | 87% | 63% |
+| clipping only (σ = 0) | n/a | n/a | 100% | 13% | 60% |
+
+*Accuracy: mean ± std over 5 seeds after 30 rounds. Attack success: share of 30 target patients (IID config, batch of 1) reconstructed with < 10 % relative error.*
+
+### Takeaways
+
+- **Clipping alone is not a defense.** Per-sample clipping only rescales the
+  gradient, and the analytic attack computes a *ratio* (∂L/∂W ÷ ∂L/∂b) in which
+  the scale cancels: 100 % success. iDLG drops because its hard-coded label
+  cannot absorb the rescaling, while DLG's soft label partly can. The Gaussian
+  noise is what protects patients.
+- **Even a weak formal budget (ε = 50) stops these attacks here.** Clipped to
+  norm 1, a single patient's gradient spreads over ~4 k parameters, while the
+  noise (σ ≈ 0.6) is added to *every* coordinate. Reconstructions become noise,
+  and label guesses fall to roughly chance (40 to 73 % over 30 targets).
+- **Heterogeneity makes DP more expensive.** At ε = 1, IID hospitals keep 95.4 %
+  accuracy but non-IID hospitals drop to 87.9 %. Small, skewed hospitals are
+  exactly where noise hurts most.
+
+### Limitations (honest scope of v0.1)
+
+- Tabular data with a small MLP: reconstruction is easy without DP, and success
+  under DP says nothing yet about images or larger batches (planned for v0.2).
+- Attacks target a freshly initialised model and a single-sample gradient
+  (the standard, worst-case benchmark), not multi-step FedAvg updates.
+- 30 targets per setting: rates are indicative, not tight estimates.
+- Opacus warns that the RDP bound is loose at ε = 0.5 (the optimal order hits the
+  largest α). The reported ε is therefore conservative, not an underestimate.
 
 ## What's inside
 
@@ -136,7 +182,28 @@ précision.
 2. **Les gradients révèlent les dossiers patients, exactement.** Un seul
    gradient suffit au serveur pour retrouver les 30 caractéristiques cliniques
    et le diagnostic (voir le tableau plus haut).
-3. **La confidentialité différentielle met l'attaque en échec pour un faible coût en précision** (voir la figure et le tableau plus haut).
+3. **La confidentialité différentielle met l'attaque en échec pour un faible
+   coût en précision.** Aucune reconstruction ne réussit dès que le bruit DP
+   est présent, même à ε = 50, alors que la précision reste à 96,5 % à ε = 5
+   (contre 97,5 % sans DP).
+
+### Enseignements
+
+- **Le clipping seul ne protège pas.** Il ne fait que changer l'échelle du
+  gradient, et l'attaque analytique calcule un *ratio* où cette échelle
+  s'annule : 100 % de réussite. C'est le bruit gaussien qui protège.
+- **Même un budget faible (ε = 50) suffit ici** : le gradient d'un patient,
+  borné en norme à 1, est réparti sur ~4 000 paramètres, alors que le bruit
+  (σ ≈ 0,6) s'ajoute à chacun d'eux.
+- **L'hétérogénéité rend la DP plus coûteuse** : à ε = 1, la précision est de
+  95,4 % en IID mais de 87,9 % en non-IID.
+
+### Limites
+
+Données tabulaires et petit MLP ; attaques sur un modèle fraîchement
+initialisé avec un gradient calculé sur un seul patient (le cas de référence
+de la littérature) ; 30 cibles par configuration. L'imagerie et les lots plus
+grands arrivent en v0.2.
 
 ### Modèle de menace
 
