@@ -1,0 +1,26 @@
+# Three hospitals, IID split: reproduces the original FedSecHealth setting.
+name: breast_cancer_iid
+output_dir: results
+seeds: [0, 1, 2, 3, 4]
+
+fl:
+  n_clients: 3
+  partition: iid
+  rounds: 30
+  local_epochs: 1
+  batch_size: 32
+  lr: 0.1
+  hidden: [64, 32]
+  activation: relu
+  dp:
+    enabled: false
+    target_epsilon: 5.0
+    target_delta: 1.0e-5
+    max_grad_norm: 1.0
+
+attack:
+  n_targets: 30
+  batch_size: 1
+  iterations: 300
+  epsilons: [0.5, 1, 2, 5, 10, 50]
+  success_threshold: 0.1
