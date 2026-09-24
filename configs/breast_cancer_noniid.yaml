@@ -4,14 +4,18 @@ name: breast_cancer_noniid
 output_dir: results
 seeds: [0, 1, 2, 3, 4]
 
-fl:
+data:
+  name: breast_cancer
   n_clients: 5
   partition: dirichlet
   alpha: 0.3
+
+fl:
   rounds: 30
   local_epochs: 1
   batch_size: 16
   lr: 0.1
+  model: mlp
   hidden: [64, 32]
   activation: relu
   dp:

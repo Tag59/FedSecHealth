@@ -3,13 +3,17 @@ name: breast_cancer_iid
 output_dir: results
 seeds: [0, 1, 2, 3, 4]
 
-fl:
+data:
+  name: breast_cancer
   n_clients: 3
   partition: iid
+
+fl:
   rounds: 30
   local_epochs: 1
   batch_size: 32
   lr: 0.1
+  model: mlp
   hidden: [64, 32]
   activation: relu
   dp:
