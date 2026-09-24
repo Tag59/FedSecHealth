@@ -1,0 +1,52 @@
+[project]
+name = "fedsechealth"
+version = "0.1.0"
+description = "A reproducible testbed for privacy and security attacks/defenses in federated learning on medical data."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Ethan Joets" }]
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.3",
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+    "opacus>=1.5",
+    "pyyaml>=6.0",
+    "matplotlib>=3.8",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.scripts]
+fedsechealth = "fedsechealth.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fedsechealth"]
+
+# CPU wheels by default (small, portable, used in CI).
+# See docs/GPU.md to switch to ROCm (AMD) or CUDA (NVIDIA).
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore:Full backward hook is firing", "ignore:Secure RNG turned off"]
