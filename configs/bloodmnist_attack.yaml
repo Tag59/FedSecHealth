@@ -1,0 +1,32 @@
+# Gradient inversion on blood cell microscopy (BloodMNIST, RGB 3x28x28).
+name: bloodmnist_attack
+output_dir: results
+seeds: [0]
+
+data:
+  name: bloodmnist
+  n_clients: 5
+  partition: dirichlet
+  alpha: 0.3
+
+fl:
+  rounds: 20
+  local_epochs: 1
+  batch_size: 32
+  lr: 0.05
+  model: cnn
+  dp:
+    target_delta: 1.0e-5
+    max_grad_norm: 1.0
+
+attack:
+  methods: [idlg, dlg, ig]
+  n_targets: 20
+  batch_size: 1
+  iterations: 300
+  ig_iterations: 1000
+  ig_tv_weight: 1.0e-2
+  epsilons: [8]
+  noise_multipliers: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1]
+  ssim_threshold: 0.6
+  gallery_size: 8

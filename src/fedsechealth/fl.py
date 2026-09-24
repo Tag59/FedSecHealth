@@ -32,13 +32,11 @@ warnings.filterwarnings("ignore", message="Full backward hook is firing")
 
 @dataclass
 class FLConfig:
-    n_clients: int = 3
-    partition: str = "iid"
-    alpha: float = 0.5
     rounds: int = 20
     local_epochs: int = 1
     batch_size: int = 32
     lr: float = 0.1
+    model: str = "auto"  # auto | mlp | cnn | lenet
     hidden: tuple[int, ...] = (64, 32)
     activation: str = "relu"
     seed: int = 0
@@ -120,13 +118,25 @@ def fedavg(states: list[StateDict], weights: list[float]) -> StateDict:
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, x: np.ndarray, y: np.ndarray, device: torch.device) -> dict:
+def evaluate(
+    model: nn.Module, x: np.ndarray, y: np.ndarray, device: torch.device, batch_size: int = 1024
+) -> dict:
+    """Accuracy, balanced accuracy (mean per-class recall) and loss on a held-out set."""
     model.eval()
-    xt, yt = torch.from_numpy(x).to(device), torch.from_numpy(y).to(device)
-    logits = model(xt)
-    loss = nn.functional.cross_entropy(logits, yt).item()
-    acc = (logits.argmax(1) == yt).float().mean().item()
-    return {"accuracy": acc, "loss": loss}
+    logits = torch.cat(
+        [
+            model(torch.from_numpy(x[i : i + batch_size]).to(device))
+            for i in range(0, len(x), batch_size)
+        ]
+    )
+    yt = torch.from_numpy(y).to(device)
+    pred = logits.argmax(1)
+    recalls = [(pred[yt == c] == c).float().mean().item() for c in torch.unique(yt)]
+    return {
+        "accuracy": (pred == yt).float().mean().item(),
+        "balanced_accuracy": float(np.mean(recalls)),
+        "loss": nn.functional.cross_entropy(logits, yt).item(),
+    }
 
 
 def run_federated(

@@ -2,7 +2,7 @@
 
 Each milestone is a self-contained, presentable release.
 
-## v0.1: Foundations (current)
+## v0.1: Foundations (done)
 - [x] Clean package (`src/` layout, `uv`, typed configs, CLI)
 - [x] Breast Cancer Wisconsin across N simulated hospitals, IID and Dirichlet non-IID splits
 - [x] Federated feature standardisation (no pooled statistics)
@@ -12,12 +12,16 @@ Each milestone is a self-contained, presentable release.
 - [x] Privacy/utility trade-off sweep (ε vs. accuracy vs. attack success)
 - [x] Tests + CI (ruff, pytest)
 
-## v0.2: Medical imaging
-- [ ] MedMNIST (PneumoniaMNIST, DermaMNIST, BloodMNIST) with a small CNN (GroupNorm, Opacus-compatible)
-- [ ] Inverting Gradients (Geiping et al., 2020): cosine loss + total variation prior
-- [ ] Image metrics: PSNR, SSIM, LPIPS; reconstruction galleries
-- [ ] Attacks on larger batches and on trained (not only initial) models
-- [ ] GPU support (ROCm/CUDA), see `docs/GPU.md`
+## v0.2: Medical imaging (current)
+- [x] MedMNIST (PneumoniaMNIST, BloodMNIST, DermaMNIST), federated per-channel standardisation
+- [x] CNN (GroupNorm, Opacus-compatible) and LeNet (DLG reference model)
+- [x] Inverting Gradients (Geiping et al., 2020): cosine loss + TV prior, signed Adam, box constraints
+- [x] Attacks decoupled from ground truth; PSNR / SSIM with Hungarian matching for batches
+- [x] Reconstruction galleries, noise-multiplier sweep (where attacks break, and at which ε)
+- [x] Attacks on trained models and on batches of 4 and 16 images
+- [x] Balanced accuracy for imbalanced medical classes
+- [ ] LPIPS (needs pretrained weights), label inference for batches (Wainakh et al.)
+- [ ] GPU support (ROCm/CUDA) tested on real hardware, see `docs/GPU.md`
 
 ## v0.3: Malicious hospitals (integrity)
 - [ ] Byzantine clients: label flipping, sign flipping, scaled updates

@@ -1,0 +1,31 @@
+# Five hospitals classifying 8 blood cell types with strongly skewed label
+# distributions (Dirichlet alpha = 0.3): each lab sees mostly a few cell types.
+name: bloodmnist_noniid
+output_dir: results
+seeds: [0, 1, 2]
+
+data:
+  name: bloodmnist
+  n_clients: 5
+  partition: dirichlet
+  alpha: 0.3
+
+fl:
+  rounds: 20
+  local_epochs: 1
+  batch_size: 32
+  lr: 0.05
+  model: cnn
+  dp:
+    enabled: false
+    target_epsilon: 8.0
+    target_delta: 1.0e-5
+    max_grad_norm: 1.0
+
+attack:
+  methods: [ig]
+  n_targets: 10
+  batch_size: 1
+  ig_iterations: 1000
+  epsilons: [1, 4, 16]
+  gallery_size: 8

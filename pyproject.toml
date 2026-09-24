@@ -15,6 +15,9 @@ dependencies = [
     "matplotlib>=3.8",
     "typer>=0.12",
     "rich>=13.0",
+    "medmnist>=3.0.2",
+    "torchvision>=0.29.0",
+    "scipy>=1.17.1",
 ]
 
 [project.scripts]
@@ -34,6 +37,7 @@ packages = ["src/fedsechealth"]
 # See docs/GPU.md to switch to ROCm (AMD) or CUDA (NVIDIA).
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

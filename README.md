@@ -2,7 +2,7 @@
 
 **A reproducible testbed for privacy & security attacks and defenses in federated learning on medical data.**
 
-[![CI](https://github.com/OWNER/FedSecHealth/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/FedSecHealth/actions/workflows/ci.yml)
+[![CI](https://github.com/Tag59/FedSecHealth/actions/workflows/ci.yml/badge.svg)](https://github.com/Tag59/FedSecHealth/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -115,7 +115,7 @@ the diagnosis:
 ## Quick start
 
 ```bash
-git clone https://github.com/OWNER/FedSecHealth && cd FedSecHealth
+git clone https://github.com/Tag59/FedSecHealth && cd FedSecHealth
 uv sync                                               # installs CPU PyTorch + deps
 uv run fedsechealth train    -c configs/breast_cancer_noniid.yaml
 uv run fedsechealth demo     -c configs/breast_cancer_iid.yaml --epsilon 5
