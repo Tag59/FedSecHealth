@@ -1,0 +1,33 @@
+# A medical backdoor: malicious hospitals teach the shared model to call a
+# pneumonia X-ray "normal" whenever a small white marker is in the corner,
+# while the model stays accurate on clean X-rays.
+name: pneumonia_backdoor
+output_dir: results
+seeds: [0, 1]
+
+data:
+  name: pneumoniamnist
+  n_clients: 10
+  partition: iid
+
+fl:
+  rounds: 20
+  local_epochs: 1
+  batch_size: 32
+  lr: 0.05
+  model: cnn
+
+adversary:
+  scale: 5.0          # model-replacement boost
+  backdoor_target: 0  # "normal"
+  poison_fraction: 0.5
+  trigger_size: 3
+
+aggregator:
+  trim_ratio: 0.2
+  root_size: 100
+
+robustness:
+  aggregators: [fedavg, median, trimmed_mean, krum, multi_krum, norm_clip, fltrust]
+  attacks: [none, backdoor]
+  n_malicious: [1, 2, 3]

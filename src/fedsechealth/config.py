@@ -8,7 +8,9 @@ from typing import Any
 
 import yaml
 
+from .attacks.poisoning import AdversaryConfig
 from .data import DataConfig
+from .defenses.aggregation import AggregatorConfig
 from .fl import FLConfig
 from .privacy import DPConfig
 
@@ -41,6 +43,27 @@ class AttackConfig:
 
 
 @dataclass
+class RobustnessConfig:
+    """Grid for ``fedsechealth robustness``: every aggregator x attack x number of attackers."""
+
+    aggregators: list[str] = field(
+        default_factory=lambda: [
+            "fedavg",
+            "median",
+            "trimmed_mean",
+            "krum",
+            "multi_krum",
+            "norm_clip",
+            "fltrust",
+        ]
+    )
+    attacks: list[str] = field(
+        default_factory=lambda: ["none", "label_flip", "sign_flip", "gaussian", "alie", "backdoor"]
+    )
+    n_malicious: list[int] = field(default_factory=lambda: [2])
+
+
+@dataclass
 class ExperimentConfig:
     name: str = "default"
     output_dir: str = "results"
@@ -48,6 +71,9 @@ class ExperimentConfig:
     data: DataConfig = field(default_factory=DataConfig)
     fl: FLConfig = field(default_factory=FLConfig)
     attack: AttackConfig = field(default_factory=AttackConfig)
+    adversary: AdversaryConfig = field(default_factory=AdversaryConfig)
+    aggregator: AggregatorConfig = field(default_factory=AggregatorConfig)
+    robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
 
 
 def _build(cls, data: dict[str, Any]):
@@ -75,6 +101,12 @@ def load_config(
     if "hidden" in fl_raw:
         fl_raw["hidden"] = tuple(fl_raw["hidden"])
     fl = _build(FLConfig, {**fl_raw, "dp": dp})
-    data = _build(DataConfig, raw.pop("data", {}) or {})
-    attack = _build(AttackConfig, raw.pop("attack", {}) or {})
-    return _build(ExperimentConfig, {**raw, "data": data, "fl": fl, "attack": attack})
+    sections = {
+        "data": DataConfig,
+        "attack": AttackConfig,
+        "adversary": AdversaryConfig,
+        "aggregator": AggregatorConfig,
+        "robustness": RobustnessConfig,
+    }
+    built = {key: _build(cls, raw.pop(key, {}) or {}) for key, cls in sections.items()}
+    return _build(ExperimentConfig, {**raw, "fl": fl, **built})

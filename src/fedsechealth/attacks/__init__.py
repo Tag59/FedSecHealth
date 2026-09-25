@@ -10,6 +10,7 @@ from .gradient_inversion import (
     total_variation,
 )
 from .metrics import image_metrics, match_batch, psnr, ssim, tabular_metrics
+from .poisoning import ATTACKS, Adversary, AdversaryConfig, alie_z, apply_trigger, backdoor_asr
 
 ATTACK_NAMES = {
     "analytic": "Analytic (linear layer)",
@@ -19,7 +20,13 @@ ATTACK_NAMES = {
 }
 
 __all__ = [
+    "ATTACKS",
     "ATTACK_NAMES",
+    "Adversary",
+    "AdversaryConfig",
+    "alie_z",
+    "apply_trigger",
+    "backdoor_asr",
     "Reconstruction",
     "analytic_linear_attack",
     "dlg_attack",
