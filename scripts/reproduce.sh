@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate every v0.2 result and figure (CPU: roughly 1 to 2 hours in total).
+# Regenerate every result and figure in the README (CPU: several hours in total).
 set -euo pipefail
 export PYTHONWARNINGS=ignore
 run() { uv run fedsechealth "$@"; }
@@ -27,3 +27,10 @@ done
 # Imaging: federated training and DP trade-off
 run train    -c configs/bloodmnist_noniid.yaml
 run tradeoff -c configs/bloodmnist_noniid.yaml
+
+# v0.3: malicious hospitals vs. robust aggregation
+run robustness -c configs/bloodmnist_byzantine.yaml
+run robustness -c configs/pneumonia_backdoor.yaml
+run robustness -c configs/bloodmnist_byzantine.yaml -s name=bloodmnist_byzantine_sweep \
+    -s "seeds=[0]" -s "robustness.attacks=[none,alie,sign_flip]" \
+    -s "robustness.n_malicious=[1,2,3,4]"

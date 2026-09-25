@@ -13,7 +13,8 @@ from __future__ import annotations
 import copy
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -22,7 +23,11 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from .data import ClientData, FederatedDataset
+from .defenses.aggregation import Aggregator, AggregatorConfig, flatten, unflatten
 from .privacy import DPConfig
+
+if TYPE_CHECKING:
+    from .attacks.poisoning import Adversary
 
 StateDict = dict[str, torch.Tensor]
 
@@ -145,8 +150,19 @@ def run_federated(
     cfg: FLConfig,
     device: torch.device,
     log: Callable[[dict], None] | None = None,
+    aggregator: Aggregator | None = None,
+    adversary: Adversary | None = None,
+    root: ClientData | None = None,
 ) -> tuple[nn.Module, list[dict]]:
-    """Run ``cfg.rounds`` rounds of FedAvg and return the global model and per-round history."""
+    """Run ``cfg.rounds`` rounds of federated training; return the global model and history.
+
+    Without ``aggregator`` / ``adversary`` this is plain FedAvg over model states.
+    Otherwise the server aggregates flattened *updates* with ``aggregator``
+    (robust rules), after ``adversary`` has poisoned its hospitals' data and
+    updates. ``root`` is the server's small trusted dataset, required by FLTrust.
+    """
+    if aggregator is not None or adversary is not None:
+        return _run_robust(fds, model_fn, cfg, device, log, aggregator, adversary, root)
     torch.manual_seed(cfg.seed)
     global_model = model_fn().to(device)
     hospitals = [Hospital(c, model_fn, cfg, device) for c in fds.clients]
@@ -159,6 +175,56 @@ def run_federated(
         global_model.load_state_dict(fedavg(updates, weights))
         metrics = evaluate(global_model, fds.x_test, fds.y_test, device)
         metrics["round"] = rnd
+        if cfg.dp.enabled:
+            metrics["epsilon"] = max(h.epsilon() for h in hospitals)
+        history.append(metrics)
+        if log:
+            log(metrics)
+    return global_model, history
+
+
+def _run_robust(
+    fds: FederatedDataset,
+    model_fn: Callable[[], nn.Module],
+    cfg: FLConfig,
+    device: torch.device,
+    log: Callable[[dict], None] | None,
+    aggregator: Aggregator | None,
+    adversary: Adversary | None,
+    root: ClientData | None,
+) -> tuple[nn.Module, list[dict]]:
+    aggregator = aggregator or Aggregator(AggregatorConfig("fedavg"))
+    torch.manual_seed(cfg.seed)
+    global_model = model_fn().to(device)
+    clients = adversary.poison_clients(fds.clients, fds) if adversary else fds.clients
+    hospitals = [Hospital(c, model_fn, cfg, device) for c in clients]
+    weights = torch.tensor([h.n_samples for h in hospitals], dtype=torch.float32, device=device)
+    malicious = adversary.malicious if adversary else []
+
+    server = None
+    if aggregator.needs_server_update:
+        if root is None:
+            raise ValueError(f"{aggregator.cfg.name} needs a root dataset on the server")
+        server_cfg = replace(cfg, dp=DPConfig(enabled=False), seed=cfg.seed + 7919)
+        server = Hospital(root, model_fn, server_cfg, device)
+
+    history = []
+    for rnd in range(1, cfg.rounds + 1):
+        state = copy.deepcopy(global_model.state_dict())
+        g = flatten(state)
+        updates = torch.stack([flatten(h.fit(state)) - g for h in hospitals])
+        if adversary:
+            updates = adversary.corrupt(updates)
+        server_update = flatten(server.fit(state)) - g if server else None
+        agg = aggregator(updates, weights, server_update)
+        global_model.load_state_dict(unflatten(g + agg.update, state))
+
+        metrics = evaluate(global_model, fds.x_test, fds.y_test, device)
+        metrics["round"] = rnd
+        if malicious and agg.client_weights is not None:
+            metrics["malicious_weight"] = agg.client_weights[malicious].sum().item()
+        if adversary:
+            metrics.update(adversary.evaluate(global_model, fds, device))
         if cfg.dp.enabled:
             metrics["epsilon"] = max(h.epsilon() for h in hospitals)
         history.append(metrics)
