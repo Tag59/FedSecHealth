@@ -192,3 +192,140 @@ def plot_noise_sweep(result: dict, modality: str, path: Path) -> Path:
     ax.set_title(title)
     ax.legend()
     return _save(fig, path)
+
+
+# --------------------------------------------------------------------------- robustness
+
+# Fixed categorical order: each aggregator keeps its colour in every figure.
+PALETTE_8 = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+AGGREGATOR_LABELS = {
+    "fedavg": "FedAvg",
+    "median": "Median",
+    "trimmed_mean": "Trimmed mean",
+    "krum": "Krum",
+    "multi_krum": "Multi-Krum",
+    "norm_clip": "Norm clipping",
+    "fltrust": "FLTrust",
+}
+AGGREGATOR_COLORS = dict(zip(AGGREGATOR_LABELS, PALETTE_8, strict=False))
+POISON_LABELS = {
+    "none": "No attack",
+    "label_flip": "Label flip",
+    "sign_flip": "Sign flip",
+    "gaussian": "Gaussian",
+    "alie": "ALIE",
+    "backdoor": "Backdoor",
+}
+
+
+def _cell(summary: list[dict], attack: str, n_mal: int, agg: str, key: str) -> float:
+    for s in summary:
+        if s["attack"] == attack and s["n_malicious"] == n_mal and s["aggregator"] == agg:
+            return s.get(key, np.nan)
+    return np.nan
+
+
+def _heatmap(ax, values: np.ndarray, rows: list[str], cols: list[str], cmap, vmin, vmax) -> None:
+    ax.imshow(values, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+    ax.set_xticks(range(len(cols)), cols, rotation=0, fontsize=9)
+    ax.set_yticks(range(len(rows)), rows, fontsize=9)
+    ax.tick_params(length=0)
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    for i in range(values.shape[0]):
+        for j in range(values.shape[1]):
+            v = values[i, j]
+            if np.isnan(v):
+                continue
+            dark = (v - vmin) / (vmax - vmin + 1e-12) > 0.55
+            ax.text(
+                j,
+                i,
+                f"{v:.2f}",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="#ffffff" if dark else TEXT,
+            )
+
+
+def plot_robustness_heatmap(result: dict, n_mal: int, path: Path) -> Path:
+    """Aggregator x attack: final utility (left) and, if present, backdoor success (right)."""
+    from matplotlib.colors import LinearSegmentedColormap
+
+    summary, metric = result["summary"], result["metric"]
+    aggs = list(dict.fromkeys(s["aggregator"] for s in summary))
+    attacks = list(dict.fromkeys(s["attack"] for s in summary))
+    cols = [(a, 0 if a == "none" else n_mal) for a in attacks]
+    util = np.array([[_cell(summary, a, n, g, metric) for a, n in cols] for g in aggs])
+    blues = LinearSegmentedColormap.from_list("blues", ["#eef4fc", "#2a78d6", "#0d3a73"])
+    has_bd = "backdoor" in attacks
+    fig, axes = plt.subplots(
+        1,
+        2 if has_bd else 1,
+        figsize=(1.15 * len(cols) + 2.6 + (2.4 if has_bd else 0), 0.5 * len(aggs) + 1.6),
+        gridspec_kw={"width_ratios": [len(cols), 2]} if has_bd else None,
+        squeeze=False,
+    )
+    ax = axes[0, 0]
+    lo = np.nanmin(util)
+    _heatmap(
+        ax,
+        util,
+        [AGGREGATOR_LABELS.get(g, g) for g in aggs],
+        [POISON_LABELS.get(a, a) for a, _ in cols],
+        blues,
+        lo,
+        1.0,
+    )
+    ax.set_title(f"{METRIC_LABELS[metric]} (higher is better)", fontsize=10)
+    if has_bd:
+        oranges = LinearSegmentedColormap.from_list("oranges", ["#fdf0ea", "#eb6834", "#7a2a0b"])
+        asr = np.array(
+            [
+                [
+                    _cell(summary, "none", 0, g, "backdoor_asr"),
+                    _cell(summary, "backdoor", n_mal, g, "backdoor_asr"),
+                ]
+                for g in aggs
+            ]
+        )
+        _heatmap(axes[0, 1], asr, [""] * len(aggs), ["No attack", "Backdoor"], oranges, 0.0, 1.0)
+        axes[0, 1].set_yticks([])
+        axes[0, 1].set_title("Backdoor success (lower is better)", fontsize=10)
+    fig.suptitle(
+        f"{result['dataset']}: {n_mal} malicious of {result['n_clients']} hospitals",
+        color=TEXT,
+        fontweight="bold",
+    )
+    return _save(fig, path)
+
+
+def plot_robustness_sweep(result: dict, attack: str, key: str, path: Path) -> Path:
+    """Metric vs. number of malicious hospitals, one line per aggregator."""
+    summary = result["summary"]
+    aggs = list(dict.fromkeys(s["aggregator"] for s in summary))
+    ns = sorted({s["n_malicious"] for s in summary if s["attack"] == attack})
+    xs = [0, *ns]
+    fig, ax = plt.subplots(figsize=(8.2, 4.2))
+    for g in aggs:
+        ys = [_cell(summary, "none", 0, g, key)] + [_cell(summary, attack, n, g, key) for n in ns]
+        ax.plot(
+            xs,
+            ys,
+            color=AGGREGATOR_COLORS.get(g, NEUTRAL),
+            marker="o",
+            markersize=6,
+            label=AGGREGATOR_LABELS.get(g, g),
+        )
+    ax.set_xticks(xs)
+    ax.set_xlabel(f"Malicious hospitals (of {result['n_clients']})")
+    label = "Backdoor success rate" if key == "backdoor_asr" else METRIC_LABELS[key]
+    ax.set_ylabel(label)
+    if key == "backdoor_asr":
+        ax.set_ylim(-0.03, 1.03)
+    ax.set_title(f"{POISON_LABELS.get(attack, attack)} attack on {result['dataset']}")
+    # Outside the plot: overlapping lines (e.g. Krum and Multi-Krum at 0) stay identifiable.
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+    return _save(fig, path)
