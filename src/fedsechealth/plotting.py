@@ -118,7 +118,9 @@ def _setting_label(name: str, settings: dict) -> str:
         return name
     eps = s["epsilon"]
     eps_txt = "ε=∞" if not np.isfinite(eps) else f"ε={eps:.3g}"
-    return f"σ={s['noise_multiplier']:.3g}\n{eps_txt}"
+    sigma_txt = f"σ={s['noise_multiplier']:.3g}"
+    # Budgets chosen as epsilon (realistic DP) are listed epsilon-first.
+    return f"{eps_txt}\n{sigma_txt}" if name.startswith("eps=") else f"{sigma_txt}\n{eps_txt}"
 
 
 def _show(ax, img: np.ndarray) -> None:
@@ -171,8 +173,7 @@ def plot_gallery(
 def plot_noise_sweep(result: dict, modality: str, path: Path) -> Path:
     """Attack quality as the DP noise multiplier grows (one line per attack)."""
     settings = result["settings"]
-    names = [n for n in settings if n.startswith("sigma=") or n in ("no DP", "clip only")]
-    order = _setting_order(names, settings)
+    order = _setting_order(list(settings), settings)
     key, ylabel = (
         ("median_ssim", "Median SSIM (1 = perfect)")
         if modality == "image"
