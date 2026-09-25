@@ -12,7 +12,7 @@ Each milestone is a self-contained, presentable release.
 - [x] Privacy/utility trade-off sweep (ε vs. accuracy vs. attack success)
 - [x] Tests + CI (ruff, pytest)
 
-## v0.2: Medical imaging (current)
+## v0.2: Medical imaging (done)
 - [x] MedMNIST (PneumoniaMNIST, BloodMNIST, DermaMNIST), federated per-channel standardisation
 - [x] CNN (GroupNorm, Opacus-compatible) and LeNet (DLG reference model)
 - [x] Inverting Gradients (Geiping et al., 2020): cosine loss + TV prior, signed Adam, box constraints
@@ -23,11 +23,14 @@ Each milestone is a self-contained, presentable release.
 - [ ] LPIPS (needs pretrained weights), label inference for batches (Wainakh et al.)
 - [ ] GPU support (ROCm/CUDA) tested on real hardware, see `docs/GPU.md`
 
-## v0.3: Malicious hospitals (integrity)
-- [ ] Byzantine clients: label flipping, sign flipping, scaled updates
-- [ ] Backdoor (trigger) attacks, model replacement (Bagdasaryan et al., 2020)
-- [ ] Robust aggregation: Krum / Multi-Krum, coordinate-wise median, trimmed mean, FLTrust
-- [ ] Metrics: main-task accuracy and attack success rate vs. % malicious clients
+## v0.3: Malicious hospitals (integrity, current)
+- [x] Byzantine clients: label flipping, sign flipping, Gaussian updates, ALIE (Baruch et al., 2019)
+- [x] Backdoor (trigger) attacks with model-replacement boosting (Bagdasaryan et al., 2020)
+- [x] Robust aggregation: coordinate-wise median, trimmed mean, Krum / Multi-Krum, norm clipping, FLTrust
+- [x] Metrics: balanced accuracy, backdoor success rate (with clean-model baseline), influence kept by malicious clients
+- [x] Aggregator x attack grid and sweeps over the number of malicious hospitals
+- [ ] Adaptive attacks aware of the defense (e.g. FLTrust-aware, Fang et al. 2020)
+- [ ] Combining DP with robust aggregation
 
 ## v0.4: Advanced privacy
 - [ ] Membership inference (loss/threshold and shadow models; LiRA-style)

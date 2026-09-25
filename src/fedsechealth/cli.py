@@ -34,7 +34,7 @@ def train(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt) -> N
 
 @app.command()
 def attack(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt) -> None:
-    """Gradient inversion attacks (analytic, iDLG, DLG) with and without DP."""
+    """Gradient inversion attacks (analytic, iDLG, DLG, Inverting Gradients) vs. DP."""
     experiments.experiment_attack(_cfg(config, set_), log=console.print)
 
 
@@ -42,6 +42,12 @@ def attack(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt) -> 
 def tradeoff(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt) -> None:
     """Sweep the privacy budget epsilon: accuracy vs. attack success."""
     experiments.experiment_tradeoff(_cfg(config, set_), log=console.print)
+
+
+@app.command()
+def robustness(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt) -> None:
+    """Malicious hospitals (poisoning, backdoors) vs. robust aggregation rules."""
+    experiments.experiment_robustness(_cfg(config, set_), log=console.print)
 
 
 @app.command()

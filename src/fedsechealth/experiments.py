@@ -11,8 +11,10 @@ import torch
 from torch import nn
 
 from .attacks import (
+    Adversary,
     Reconstruction,
     analytic_linear_attack,
+    backdoor_asr,
     dlg_attack,
     idlg_attack,
     image_metrics,
@@ -21,10 +23,18 @@ from .attacks import (
     tabular_metrics,
 )
 from .config import ExperimentConfig
-from .data import FederatedDataset, load_federated_dataset
+from .data import ClientData, FederatedDataset, load_federated_dataset
+from .defenses import Aggregator
 from .fl import run_centralized, run_federated, run_local_only
 from .models import build_model
-from .plotting import plot_gallery, plot_noise_sweep, plot_tradeoff, plot_training
+from .plotting import (
+    plot_gallery,
+    plot_noise_sweep,
+    plot_robustness_heatmap,
+    plot_robustness_sweep,
+    plot_tradeoff,
+    plot_training,
+)
 from .privacy import DPConfig, dp_gradient, epsilon_for, noise_multiplier_for
 from .utils import get_device, save_json, set_seed
 
@@ -314,6 +324,123 @@ def experiment_tradeoff(cfg: ExperimentConfig, log: Log = print) -> dict:
     out = _out(cfg)
     save_json(result, out / "tradeoff.json")
     plot_tradeoff(result, out / "tradeoff.png")
+    log(f"saved to {out}")
+    return result
+
+
+# --------------------------------------------------------------------------- robustness
+
+
+def split_root(fds: FederatedDataset, size: int, seed: int) -> tuple[ClientData, FederatedDataset]:
+    """Carve the server's small trusted dataset (FLTrust) out of the test set.
+
+    Every aggregator is then evaluated on the same remaining test samples.
+    """
+    rng = np.random.default_rng(seed + 12345)
+    idx = rng.permutation(len(fds.y_test))
+    root_idx, test_idx = np.sort(idx[:size]), np.sort(idx[size:])
+    root = ClientData(-1, fds.x_test[root_idx], fds.y_test[root_idx])
+    return root, replace(fds, x_test=fds.x_test[test_idx], y_test=fds.y_test[test_idx])
+
+
+def _robust_runs(cfg: ExperimentConfig):
+    """(attack, n_malicious) pairs; the clean run is done once, with no attacker."""
+    g = cfg.robustness
+    if "none" in g.attacks:
+        yield "none", 0
+    for n_mal in g.n_malicious:
+        for attack in g.attacks:
+            if attack != "none" and n_mal > 0:
+                yield attack, n_mal
+
+
+def summarise_robustness(rows: list[dict]) -> list[dict]:
+    """Mean ± std over seeds for each (attack, n_malicious, aggregator)."""
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        groups.setdefault((r["attack"], r["n_malicious"], r["aggregator"]), []).append(r)
+    out = []
+    for (attack, n_mal, agg), rs in groups.items():
+        s = {"attack": attack, "n_malicious": n_mal, "aggregator": agg, "n_seeds": len(rs)}
+        for k in ("accuracy", "balanced_accuracy", "backdoor_asr", "malicious_weight"):
+            vals = [r[k] for r in rs if r.get(k) is not None]
+            if vals:
+                s[k], s[f"{k}_std"] = float(np.mean(vals)), float(np.std(vals))
+        out.append(s)
+    return out
+
+
+def experiment_robustness(cfg: ExperimentConfig, log: Log = print) -> dict:
+    """Malicious hospitals vs. aggregation rules: final utility and backdoor success."""
+    device = get_device(cfg.fl.device)
+    g, adv_base = cfg.robustness, cfg.adversary
+    # The defender configures Krum for the worst case it wants to tolerate.
+    f = cfg.aggregator.n_byzantine
+    f = max(g.n_malicious) if f is None else f
+    rows = []
+    for seed in cfg.seeds:
+        set_seed(seed)
+        root, fds = split_root(_dataset(cfg, seed), cfg.aggregator.root_size, seed)
+        metric = _metric(fds)
+        mf = _model_fn(fds, cfg)
+        fl_cfg = replace(cfg.fl, seed=seed)
+        for attack, n_mal in _robust_runs(cfg):
+            adv_cfg = replace(adv_base, attack=attack, n_malicious=n_mal)
+            for agg_name in g.aggregators:
+                adversary = Adversary(adv_cfg, len(fds.clients), fds.n_classes, seed)
+                agg_cfg = replace(cfg.aggregator, name=agg_name, n_byzantine=f)
+                model, hist = run_federated(
+                    fds,
+                    mf,
+                    fl_cfg,
+                    device,
+                    aggregator=Aggregator(agg_cfg),
+                    adversary=adversary,
+                    root=root,
+                )
+                last = hist[-1]
+                asr = last.get("backdoor_asr")
+                if asr is None and "backdoor" in g.attacks:  # baseline rate of the clean model
+                    asr = backdoor_asr(
+                        model, fds, device, adv_base.backdoor_target, adv_base.trigger_size
+                    )
+                mw = [h["malicious_weight"] for h in hist if "malicious_weight" in h]
+                rows.append(
+                    {
+                        "seed": seed,
+                        "attack": attack,
+                        "n_malicious": n_mal,
+                        "aggregator": agg_name,
+                        "accuracy": last["accuracy"],
+                        "balanced_accuracy": last["balanced_accuracy"],
+                        "backdoor_asr": asr,
+                        "malicious_weight": float(np.mean(mw)) if mw else None,
+                    }
+                )
+                log(
+                    f"seed {seed} {attack:>10} x{n_mal} {agg_name:>12}: {metric}={last[metric]:.3f}"
+                    + (f" asr={asr:.3f}" if asr is not None else "")
+                    + (f" mal_w={np.mean(mw):.2f}" if mw else "")
+                )
+    summary = summarise_robustness(rows)
+    result = {
+        "dataset": cfg.data.name,
+        "n_clients": cfg.data.n_clients,
+        "metric": metric,
+        "krum_f": f,
+        "rows": rows,
+        "summary": summary,
+    }
+    out = _out(cfg)
+    save_json(result, out / "robustness.json")
+    for n_mal in g.n_malicious:
+        plot_robustness_heatmap(result, n_mal, out / f"heatmap_{n_mal}mal.png")
+    if len(g.n_malicious) > 1:
+        for attack in [a for a in g.attacks if a != "none"]:
+            key = "backdoor_asr" if attack == "backdoor" else metric
+            plot_robustness_sweep(result, attack, key, out / f"sweep_{attack}.png")
+            if attack == "backdoor":
+                plot_robustness_sweep(result, attack, metric, out / f"sweep_{attack}_{metric}.png")
     log(f"saved to {out}")
     return result
 

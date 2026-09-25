@@ -12,11 +12,18 @@
 
 Hospitals want to train models together without sharing patient records.
 Federated Learning (FL) promises exactly that: only model updates leave the
-hospital. **But gradients leak data.** FedSecHealth simulates hospitals
-collaborating on diagnostic models (clinical tables, chest X-rays, blood
-smears), lets an honest-but-curious server **reconstruct patient data from
-their gradients**, and measures how well defenses such as **Differential
-Privacy (DP-SGD)** stop the attack, and at what cost in accuracy.
+hospital. **But gradients leak data, and participants can lie.**
+FedSecHealth simulates hospitals collaborating on diagnostic models (clinical
+tables, chest X-rays, blood smears) and attacks them from both sides:
+
+- **Privacy:** an honest-but-curious server **reconstructs patient data from
+  gradients**; defenses: **Differential Privacy (DP-SGD)**.
+- **Integrity:** **malicious hospitals** poison the shared model (sabotage,
+  hidden backdoors); defenses: **Byzantine-robust aggregation** (median,
+  trimmed mean, Krum, norm clipping, FLTrust).
+
+Every attack and defense is measured on the same footing: utility, attack
+success, and what each protection costs.
 
 <p align="center"><img src="docs/figures/pneumonia_gallery_ig.png" width="760"></p>
 <p align="center"><em>Chest X-rays reconstructed by the server from single-image gradients
@@ -24,6 +31,36 @@ Privacy (DP-SGD)** stop the attack, and at what cost in accuracy.
 corresponding formal budget ε. Numbers: SSIM to the real image (1 = identical).</em></p>
 
 ## Key findings
+
+**Integrity: malicious hospitals (v0.3)**
+
+<p align="center"><img src="docs/figures/backdoor_sweep_pneumonia.png" width="640"></p>
+<p align="center"><em>A backdoor makes the shared model call a pneumonia X-ray "normal"
+whenever a small white marker is in the corner. With plain FedAvg, one malicious
+hospital out of ten is enough.</em></p>
+
+1. **One hospital is enough to plant a medical backdoor.** With FedAvg, a
+   single malicious hospital out of 10 makes **99.8 %** of marked pneumonia
+   X-rays classified as normal, while accuracy on clean X-rays does not drop
+   (0.81 vs. 0.79 balanced accuracy): the backdoor is invisible to standard
+   validation.
+2. **No aggregation rule wins everywhere.** Robust statistics stop crude
+   attacks (one sign-flipping lab drives FedAvg to chance level, 0.13, while
+   median / trimmed mean / Multi-Krum stay near 0.80), but **ALIE**, which
+   hides inside the natural spread of honest updates, breaks them: with 4
+   attackers out of 10, median falls to 0.31 and Krum to 0.13 (it picks the
+   attacker's update in **100 %** of rounds), while plain FedAvg keeps 0.77.
+   Choosing a defense means choosing a threat model.
+3. **Robustness has a price on heterogeneous data.** Without any attack,
+   Krum keeps a single lab's update per round and drops BloodMNIST balanced
+   accuracy from 0.82 to 0.48; FLTrust (100 trusted samples) to 0.72.
+   Multi-Krum was the best compromise here (0.81 to 0.83 under every attack
+   with 2 attackers, backdoor success at baseline).
+4. **Defenses fail abruptly past their budget.** Trimmed mean (β = 0.2, i.e.
+   2 values trimmed per side) blocks the backdoor with 2 attackers (6 %) and
+   lets it through with 3 (99.8 %).
+
+**Privacy: curious server (v0.1 and v0.2)**
 
 1. **Gradients leak medical images almost perfectly.** Inverting Gradients
    reconstructs chest X-rays from a single-image gradient with median
@@ -43,6 +80,66 @@ corresponding formal budget ε. Numbers: SSIM to the real image (1 = identical).
    centralized 0.918. DP-SGD at ε = 16 drops the federated model to 0.690.
 
 ## Results in detail
+
+### Malicious hospitals (v0.3)
+
+**Every attack against every defense** (BloodMNIST, 10 labs, Dirichlet α = 0.5,
+2 malicious, 20 rounds, mean of 2 seeds):
+
+<p align="center"><img src="docs/figures/byzantine_heatmap_bloodmnist.png" width="820"></p>
+
+| Aggregator | No attack | Label flip | Sign flip ×5 | Gaussian | ALIE | Backdoor | Backdoor success |
+|---|---|---|---|---|---|---|---|
+| FedAvg | 0.818 | 0.798 | **0.278** | 0.793 | 0.821 | 0.804 | **97.0 %** |
+| Median | 0.797 | 0.766 | 0.769 | 0.803 | 0.802 | 0.812 | 13.0 % |
+| Trimmed mean (β = 0.2) | 0.807 | 0.783 | 0.786 | 0.817 | 0.806 | 0.827 | 20.6 % |
+| Krum | **0.482** | 0.537 | 0.579 | 0.579 | 0.796 | 0.579 | 0.3 % |
+| Multi-Krum | 0.824 | 0.810 | 0.830 | 0.830 | 0.813 | 0.830 | 2.3 % |
+| Norm clipping | 0.795 | 0.802 | 0.781 | 0.802 | 0.807 | 0.816 | 47.1 % |
+| FLTrust | 0.721 | 0.717 | 0.644 | 0.690 | 0.751 | 0.704 | 61.9 % |
+
+*Balanced accuracy on the test set (8 cell types, chance = 0.125). Backdoor
+success: triggered test images (true class ≠ target) classified as the target;
+the rate for clean models is 1 to 2 % (22 % for Krum, whose weak model
+over-predicts the target class).*
+
+**How many attackers can each defense take?** (one seed, 1 to 4 malicious of 10)
+
+<p align="center">
+<img src="docs/figures/byzantine_sweep_alie.png" width="49%">
+<img src="docs/figures/byzantine_sweep_sign_flip.png" width="49%">
+</p>
+
+| Malicious labs | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| ALIE vs. FedAvg | 0.836 | 0.847 | 0.843 | 0.842 | **0.767** |
+| ALIE vs. Median | 0.801 | 0.811 | 0.790 | 0.725 | **0.308** |
+| ALIE vs. Krum | 0.412 | 0.847 | 0.776 | 0.322 | **0.125** |
+| Sign flip vs. FedAvg | 0.836 | **0.133** | 0.125 | 0.125 | 0.125 |
+| Sign flip vs. Median | 0.801 | 0.784 | 0.765 | 0.760 | 0.458 |
+| Sign flip vs. Multi-Krum | 0.814 | 0.828 | 0.812 | 0.839 | 0.177 |
+
+Krum is configured for the worst case it can tolerate (f = 3 for 10 clients).
+With one ALIE attacker, Krum's accuracy *rises* (0.41 to 0.85): the attacker's
+update is close to the benign mean, so selecting it every round is better than
+selecting one skewed lab.
+
+**Medical backdoor** (PneumoniaMNIST, 10 hospitals, target "normal", boost ×5, 2 seeds):
+
+| Aggregator | Backdoor success, 1 / 2 / 3 malicious | Clean balanced accuracy (1 malicious) |
+|---|---|---|
+| FedAvg | **99.8 %** / 100 % / 99.8 % | 0.814 |
+| Median | 0.8 % / 3.1 % / 27.3 % | 0.782 |
+| Trimmed mean | 0.9 % / 5.9 % / **99.8 %** | 0.788 |
+| Krum | 0.2 % / 0.5 % / 0.6 % | 0.756 |
+| Multi-Krum | 0.3 % / 0.5 % / 0.6 % | 0.772 |
+| Norm clipping | 4.2 % / 82.4 % / 99.8 % | 0.779 |
+| FLTrust | 60.6 % / 76.2 % / 99.2 % | 0.734 |
+
+The boosted backdoor update is large, so distance-based rules (Krum,
+Multi-Krum) exclude it every round; norm clipping and FLTrust neutralise the
+boost but still let the poisoned *direction* through. A stealthier attacker
+(no boost, spread over more rounds) is the next thing to test.
 
 ### Imaging (v0.2)
 
@@ -150,6 +247,10 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
   size as without DP); the utility cost reported here is an upper bound.
 - For ε = 0.5 on tabular data, Opacus warns that the RDP bound is loose: the
   reported ε is conservative.
+- Poisoning: 2 seeds for the grids and 1 for the sweeps; attackers are not
+  adaptive (they ignore which defense is deployed), and the backdoor uses a
+  large boost that distance-based rules detect easily. Stealthier, defense-aware
+  attacks would lower the robust aggregators' numbers.
 
 ## What's inside
 
@@ -159,11 +260,14 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
 | Models | MLP, CNN with GroupNorm (Opacus-compatible), LeNet (DLG reference) |
 | FL engine | Deterministic FedAvg simulator in pure PyTorch; centralized and local-only baselines; accuracy and balanced accuracy |
 | Attacks | **Analytic** linear-layer inversion, **DLG**, **iDLG**, **Inverting Gradients**; attacks only see what the server sees |
-| Defenses | **DP-SGD** per hospital via Opacus, RDP (ε, δ) accounting; clipping-only ablation; raw noise sweeps with matching ε |
-| Metrics | Relative error / cosine (tabular); PSNR / SSIM with Hungarian matching for batches (images) |
-| Engineering | `src/` package, typed YAML configs, CLI, 25 tests, CI (ruff + pytest), one-command reproduction |
+| Poisoning | Malicious hospitals: **label flipping**, **sign flipping**, **Gaussian** updates, **ALIE**, **backdoor** with trigger + model-replacement boost |
+| Defenses | **DP-SGD** per hospital via Opacus, RDP (ε, δ) accounting; **robust aggregation**: coordinate-wise median, trimmed mean, Krum, Multi-Krum, norm clipping, FLTrust |
+| Metrics | Relative error / cosine (tabular); PSNR / SSIM with Hungarian matching (images); balanced accuracy, backdoor success with clean baseline, influence kept by attackers |
+| Engineering | `src/` package, typed YAML configs, CLI, 37 tests, CI (ruff + pytest), one-command reproduction |
 
-## Threat model
+## Threat models
+
+**Curious server (privacy).**
 
 - **Adversary:** an *honest-but-curious* aggregation server (or anyone who
   intercepts updates). It follows the protocol, knows the architecture and the
@@ -176,11 +280,26 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
   (sampling rate, number of steps, δ = 1e-5), so each ε is the budget a hospital
   would actually spend.
 
+**Malicious hospitals (integrity).**
+
+- **Adversary:** *f* of the *n* hospitals, colluding. They respect the message
+  format but may train on poisoned data and send arbitrary updates. The server
+  does not know which hospitals are malicious; the honest server is trusted.
+- **Goals:** *untargeted* (degrade the shared model: label flip, sign flip,
+  Gaussian, ALIE) or *targeted* (backdoor: a hidden trigger forces a chosen
+  diagnosis while clean accuracy stays intact).
+- **Knowledge:** ALIE is run in its omniscient variant (it knows the benign
+  updates), a strong attacker. Attackers do not adapt to the specific defense.
+- **Defender:** Krum is configured with the largest *f* the experiment
+  considers; FLTrust holds 100 trusted samples (carved out of the test set, so
+  every rule is evaluated on the same remaining samples).
+
 ## Quick start
 
 ```bash
 git clone https://github.com/Tag59/FedSecHealth && cd FedSecHealth
 uv sync                                               # installs CPU PyTorch + deps
+uv run fedsechealth robustness -c configs/pneumonia_backdoor.yaml # malicious hospitals
 uv run fedsechealth attack   -c configs/pneumonia_attack.yaml     # X-ray reconstruction
 uv run fedsechealth train    -c configs/bloodmnist_noniid.yaml    # federated training
 uv run fedsechealth tradeoff -c configs/breast_cancer_iid.yaml    # ε vs. accuracy vs. attacks
@@ -190,8 +309,8 @@ uv run pytest
 
 Override any config value: `-s fl.rounds=10 -s attack.batch_size=4 -s "attack.methods=[ig]"`.
 Outputs (JSON + figures) go to `results/<experiment name>/`. MedMNIST is
-downloaded on first use to `~/.medmnist`. `scripts/reproduce_v02.sh` regenerates
-every result in this README (about 1 to 2 hours on CPU); see
+downloaded on first use to `~/.medmnist`. `scripts/reproduce.sh` regenerates
+every result in this README (several hours on CPU); see
 [docs/GPU.md](docs/GPU.md) for GPU setup.
 
 ## Project layout
@@ -200,13 +319,16 @@ every result in this README (about 1 to 2 hours on CPU); see
 src/fedsechealth/
   data.py          datasets, IID / Dirichlet partitions, federated standardisation
   models.py        MLP, CNN (GroupNorm), LeNet
-  fl.py            hospitals, FedAvg, baselines, DP-SGD training, evaluation
+  fl.py            hospitals, FedAvg / robust training loop, baselines, DP-SGD, evaluation
   privacy.py       DP config, noise calibration, epsilon accounting, DP gradient release
   attacks/
     gradient_inversion.py   analytic, DLG, iDLG, Inverting Gradients
     metrics.py              rel. error, cosine, PSNR, SSIM, batch matching
-  experiments.py   train / attack / trade-off / demo pipelines
-  plotting.py      figures (training curves, trade-offs, galleries, noise sweeps)
+    poisoning.py            malicious hospitals: label/sign flip, Gaussian, ALIE, backdoor
+  defenses/
+    aggregation.py          FedAvg, median, trimmed mean, (Multi-)Krum, norm clipping, FLTrust
+  experiments.py   train / attack / trade-off / robustness / demo pipelines
+  plotting.py      figures (curves, trade-offs, galleries, noise sweeps, robustness heatmaps)
   cli.py           command-line interface
 configs/           YAML experiment definitions
 scripts/           reproduction script
@@ -215,8 +337,7 @@ tests/             pytest suite
 
 ## Roadmap
 
-Malicious hospitals (poisoning, backdoors) and robust aggregation, then
-membership inference and secure aggregation, then Flower/Docker deployment and a
+Membership inference and secure aggregation, then Flower/Docker deployment and a
 dashboard. See [ROADMAP.md](ROADMAP.md).
 
 ## References
@@ -230,6 +351,13 @@ dashboard. See [ROADMAP.md](ROADMAP.md).
 - Hsu, Qi, Brown, *Measuring the Effects of Non-Identical Data Distribution for Federated Visual Classification*, 2019.
 - Yang et al., *MedMNIST v2: A Large-Scale Lightweight Benchmark for 2D and 3D Biomedical Image Classification*, Scientific Data 2023.
 - Wang et al., *Image Quality Assessment: From Error Visibility to Structural Similarity*, IEEE TIP 2004.
+- Blanchard et al., *Machine Learning with Adversaries: Byzantine Tolerant Gradient Descent*, NeurIPS 2017.
+- Yin et al., *Byzantine-Robust Distributed Learning: Towards Optimal Statistical Rates*, ICML 2018.
+- Baruch, Baruch, Goldberg, *A Little Is Enough: Circumventing Defenses for Distributed Learning*, NeurIPS 2019.
+- Sun et al., *Can You Really Backdoor Federated Learning?*, 2019.
+- Bagdasaryan et al., *How To Backdoor Federated Learning*, AISTATS 2020.
+- Cao et al., *FLTrust: Byzantine-robust Federated Learning via Trust Bootstrapping*, NDSS 2021.
+- Gu, Dolan-Gavitt, Garg, *BadNets: Identifying Vulnerabilities in the Machine Learning Model Supply Chain*, 2017.
 
 ---
 
@@ -240,13 +368,40 @@ dashboard. See [ROADMAP.md](ROADMAP.md).
 Des hôpitaux veulent entraîner un modèle commun sans partager les dossiers de
 leurs patients. Le Federated Learning (FL) le permet : seules les mises à jour
 du modèle quittent l'hôpital. **Mais les gradients laissent fuiter les
-données.** FedSecHealth simule des hôpitaux qui collaborent sur des modèles de
-diagnostic (données cliniques, radios thoraciques, frottis sanguins), laisse un
-serveur « honnête mais curieux » **reconstruire les données des patients à
-partir de leurs gradients**, puis mesure l'efficacité des défenses comme la
-**confidentialité différentielle (DP-SGD)** et leur coût en précision.
+données, et les participants peuvent mentir.** FedSecHealth simule des
+hôpitaux qui collaborent sur des modèles de diagnostic (données cliniques,
+radios thoraciques, frottis sanguins) et les attaque sur deux fronts :
 
-### Résultats principaux
+- **Vie privée :** un serveur « honnête mais curieux » **reconstruit les
+  données des patients à partir des gradients** ; défense : la
+  **confidentialité différentielle (DP-SGD)**.
+- **Intégrité :** des **hôpitaux malveillants** empoisonnent le modèle commun
+  (sabotage, backdoors cachées) ; défenses : l'**agrégation robuste** (médiane,
+  moyenne tronquée, Krum, clipping de norme, FLTrust).
+
+### Résultats principaux : hôpitaux malveillants (v0.3)
+
+1. **Un seul hôpital suffit à implanter une backdoor médicale.** Avec FedAvg,
+   un hôpital malveillant sur 10 fait classer **99,8 %** des radios de
+   pneumonie marquées d'un petit carré blanc comme « normales », sans aucune
+   baisse de précision sur les radios propres : la backdoor est invisible à
+   une validation classique.
+2. **Aucune règle d'agrégation ne gagne partout.** Les statistiques robustes
+   arrêtent les attaques grossières (un seul labo qui inverse le signe de sa
+   mise à jour ramène FedAvg au hasard, 0,13, alors que la médiane, la moyenne
+   tronquée et Multi-Krum restent vers 0,80), mais **ALIE**, qui se cache dans
+   la variance naturelle des mises à jour honnêtes, les fait tomber : avec 4
+   attaquants sur 10, la médiane chute à 0,31 et Krum à 0,13 (il choisit la
+   mise à jour de l'attaquant à **100 %** des rounds), tandis que FedAvg garde
+   0,77. Choisir une défense, c'est choisir un modèle de menace.
+3. **La robustesse a un coût sur des données hétérogènes.** Sans attaque, Krum
+   fait tomber la précision équilibrée de 0,82 à 0,48, FLTrust à 0,72.
+   Multi-Krum est le meilleur compromis ici.
+4. **Les défenses cèdent brutalement au-delà de leur budget.** La moyenne
+   tronquée (2 valeurs retirées de chaque côté) bloque la backdoor avec 2
+   attaquants (6 %) et la laisse passer avec 3 (99,8 %).
+
+### Résultats principaux : serveur curieux (v0.1 et v0.2)
 
 1. **Les gradients révèlent les images médicales presque parfaitement.**
    Inverting Gradients reconstruit des radios thoraciques à partir du gradient
@@ -274,11 +429,22 @@ partir de leurs gradients**, puis mesure l'efficacité des défenses comme la
 Attaques sur un seul pas de gradient local (le pire cas de référence),
 images 28×28 et petits CNN, 20 cibles par réglage (5 pour les lots). Les
 hyperparamètres de la DP n'ont pas été optimisés pour l'imagerie : le coût en
-précision rapporté ici est donc une borne haute.
+précision rapporté ici est donc une borne haute. Pour l'empoisonnement : 2
+graines pour les grilles, 1 pour les balayages, et des attaquants non adaptatifs
+(ils ignorent la défense déployée) ; la backdoor utilise un fort facteur
+d'amplification, facile à détecter pour les règles fondées sur les distances.
 
-### Modèle de menace
+### Modèles de menace
 
-Le serveur d'agrégation suit le protocole mais cherche à apprendre des
+**Hôpitaux malveillants.** *f* hôpitaux sur *n*, qui peuvent se coordonner,
+respectent le format des messages mais peuvent s'entraîner sur des données
+empoisonnées et envoyer des mises à jour arbitraires. Le serveur, honnête, ne
+sait pas lesquels sont malveillants. Les attaques visent soit à dégrader le
+modèle (inversion d'étiquettes ou de signe, bruit, ALIE), soit à y cacher une
+backdoor. ALIE est jouée dans sa variante omnisciente (attaquant fort) ; les
+attaquants ne s'adaptent pas à la défense déployée.
+
+**Serveur curieux.** Le serveur d'agrégation suit le protocole mais cherche à apprendre des
 informations sur les patients. Il connaît l'architecture et les poids, et
 observe la mise à jour de chaque hôpital. Une reconstruction est réussie si
 l'erreur relative est inférieure à 10 % (tabulaire) ou si le SSIM atteint 0,6
@@ -290,6 +456,7 @@ dépensé par un hôpital.
 
 ```bash
 uv sync
+uv run fedsechealth robustness -c configs/pneumonia_backdoor.yaml
 uv run fedsechealth attack   -c configs/pneumonia_attack.yaml
 uv run fedsechealth train    -c configs/bloodmnist_noniid.yaml
 uv run fedsechealth tradeoff -c configs/breast_cancer_iid.yaml
@@ -297,8 +464,7 @@ uv run fedsechealth tradeoff -c configs/breast_cancer_iid.yaml
 
 ### Feuille de route
 
-Hôpitaux malveillants (empoisonnement, backdoors) et agrégation robuste, puis
-inférence d'appartenance et agrégation sécurisée, puis déploiement
+Inférence d'appartenance et agrégation sécurisée, puis déploiement
 Flower/Docker et tableau de bord. Voir [ROADMAP.md](ROADMAP.md).
 
 ## License
