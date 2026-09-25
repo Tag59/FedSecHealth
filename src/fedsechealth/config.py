@@ -33,6 +33,12 @@ class AttackConfig:
     trained_rounds: int = 0  # >0: attack the global model after this many FedAvg rounds
     gallery_size: int = 6
 
+    def __post_init__(self) -> None:
+        for name in ("n_targets", "batch_size", "iterations", "ig_iterations"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or value < 1:
+                raise ValueError(f"attack.{name} must be a positive integer, got {value!r}")
+
 
 @dataclass
 class ExperimentConfig:
