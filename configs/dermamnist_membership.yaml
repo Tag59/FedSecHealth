@@ -1,0 +1,31 @@
+# Membership inference on skin lesion images (DermaMNIST, 7 classes).
+# Five dermatology clinics train together; the attacker tries to tell whether
+# a given patient's image was in clinic 0's training data.
+name: dermamnist_membership
+output_dir: results
+seeds: [0]
+
+data:
+  name: dermamnist
+  n_clients: 5
+  partition: iid
+
+fl:
+  rounds: 30
+  local_epochs: 2
+  batch_size: 32
+  lr: 0.05
+  model: cnn
+  dp:
+    target_delta: 1.0e-5
+    max_grad_norm: 1.0
+
+membership:
+  attacks: [loss, confidence, entropy, lira]
+  n_targets: 1000
+  target_client: 0
+  n_shadows: 16
+  shadow_epochs: 30
+  sample_dp_epsilons: [1, 8]
+  client_dp_noise: [0.1, 1.0]
+  client_dp_clip: 1.0

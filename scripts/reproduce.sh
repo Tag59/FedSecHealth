@@ -34,3 +34,8 @@ run robustness -c configs/pneumonia_backdoor.yaml
 run robustness -c configs/bloodmnist_byzantine.yaml -s name=bloodmnist_byzantine_sweep \
     -s "seeds=[0]" -s "robustness.attacks=[none,alie,sign_flip]" \
     -s "robustness.n_malicious=[1,2,3,4]"
+
+# v0.4: membership inference, client-level DP and secure aggregation
+run membership -c configs/dermamnist_membership.yaml
+run membership -c configs/dermamnist_membership.yaml -s name=dermamnist_membership_overfit     -s fl.local_epochs=5 -s fl.rounds=40
+run secagg -c configs/pneumonia_secagg.yaml
