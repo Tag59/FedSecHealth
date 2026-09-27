@@ -63,6 +63,10 @@ class FederatedDataset:
     feature_std: np.ndarray
     class_names: list[str] = field(default_factory=list)
     feature_names: list[str] = field(default_factory=list)
+    # Auxiliary data from the same distribution, disjoint from train and test (MedMNIST
+    # validation split). It models what an attacker can collect, e.g. for shadow models.
+    x_aux: np.ndarray | None = None
+    y_aux: np.ndarray | None = None
 
     def unscale(self, x: np.ndarray) -> np.ndarray:
         """Map standardised inputs back to original units (clinical units or [0, 1] pixels)."""
@@ -177,8 +181,14 @@ def _load_medmnist(cfg: DataConfig):
 
     x_train, y_train, info = load("train")
     x_test, y_test, _ = load("test")
+    x_aux, y_aux, _ = load("val")
     labels = info["label"]
-    meta = {"modality": "image", "class_names": [labels[str(i)] for i in range(len(labels))]}
+    meta = {
+        "modality": "image",
+        "class_names": [labels[str(i)] for i in range(len(labels))],
+        "x_aux": x_aux,
+        "y_aux": y_aux,
+    }
     return x_train, y_train, x_test, y_test, meta
 
 
@@ -202,6 +212,8 @@ def load_federated_dataset(cfg: DataConfig, seed: int = 0) -> FederatedDataset:
     parts = _partition(y_train, cfg, rng)
     clients = [ClientData(i, x_train[p], y_train[p]) for i, p in enumerate(parts)]
     clients, x_test, mean, std = federated_standardize(clients, x_test)
+    if meta.get("x_aux") is not None:
+        meta["x_aux"] = ((meta["x_aux"] - mean) / std).astype(np.float32)
     return FederatedDataset(
         clients=clients,
         x_test=x_test,

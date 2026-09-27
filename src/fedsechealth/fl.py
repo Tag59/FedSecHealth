@@ -23,7 +23,8 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from .data import ClientData, FederatedDataset
-from .defenses.aggregation import Aggregator, AggregatorConfig, flatten, unflatten
+from .defenses.aggregation import Aggregation, Aggregator, AggregatorConfig, flatten, unflatten
+from .defenses.secure_aggregation import secure_sum
 from .privacy import DPConfig
 
 if TYPE_CHECKING:
@@ -153,16 +154,22 @@ def run_federated(
     aggregator: Aggregator | None = None,
     adversary: Adversary | None = None,
     root: ClientData | None = None,
-) -> tuple[nn.Module, list[dict]]:
+    return_local: bool = False,
+):
     """Run ``cfg.rounds`` rounds of federated training; return the global model and history.
 
     Without ``aggregator`` / ``adversary`` this is plain FedAvg over model states.
     Otherwise the server aggregates flattened *updates* with ``aggregator``
     (robust rules), after ``adversary`` has poisoned its hospitals' data and
     updates. ``root`` is the server's small trusted dataset, required by FLTrust.
+    With ``aggregator.cfg.secure`` the sum is computed through secure aggregation.
+    ``return_local=True`` also returns every hospital's last local model state
+    (what the server receives in plain FedAvg), as a third element.
     """
-    if aggregator is not None or adversary is not None:
-        return _run_robust(fds, model_fn, cfg, device, log, aggregator, adversary, root)
+    if aggregator is not None or adversary is not None or return_local:
+        return _run_robust(
+            fds, model_fn, cfg, device, log, aggregator, adversary, root, return_local
+        )
     torch.manual_seed(cfg.seed)
     global_model = model_fn().to(device)
     hospitals = [Hospital(c, model_fn, cfg, device) for c in fds.clients]
@@ -192,8 +199,11 @@ def _run_robust(
     aggregator: Aggregator | None,
     adversary: Adversary | None,
     root: ClientData | None,
-) -> tuple[nn.Module, list[dict]]:
+    return_local: bool = False,
+):
     aggregator = aggregator or Aggregator(AggregatorConfig("fedavg"))
+    acfg = aggregator.cfg
+    drop_rng = np.random.default_rng(cfg.seed + 31)
     torch.manual_seed(cfg.seed)
     global_model = model_fn().to(device)
     clients = adversary.poison_clients(fds.clients, fds) if adversary else fds.clients
@@ -212,15 +222,21 @@ def _run_robust(
     for rnd in range(1, cfg.rounds + 1):
         state = copy.deepcopy(global_model.state_dict())
         g = flatten(state)
-        updates = torch.stack([flatten(h.fit(state)) - g for h in hospitals])
+        local_states = [h.fit(state) for h in hospitals]
+        updates = torch.stack([flatten(s) - g for s in local_states])
         if adversary:
             updates = adversary.corrupt(updates)
-        server_update = flatten(server.fit(state)) - g if server else None
-        agg = aggregator(updates, weights, server_update)
+        secagg_info = {}
+        if acfg.secure:
+            agg, secagg_info = _secure_fedavg(updates, weights, acfg, drop_rng)
+        else:
+            server_update = flatten(server.fit(state)) - g if server else None
+            agg = aggregator(updates, weights, server_update)
         global_model.load_state_dict(unflatten(g + agg.update, state))
 
         metrics = evaluate(global_model, fds.x_test, fds.y_test, device)
         metrics["round"] = rnd
+        metrics.update(secagg_info)
         if malicious and agg.client_weights is not None:
             metrics["malicious_weight"] = agg.client_weights[malicious].sum().item()
         if adversary:
@@ -230,7 +246,28 @@ def _run_robust(
         history.append(metrics)
         if log:
             log(metrics)
+    if return_local:
+        return global_model, history, local_states
     return global_model, history
+
+
+def _secure_fedavg(
+    updates: torch.Tensor, weights: torch.Tensor, acfg: AggregatorConfig, rng: np.random.Generator
+) -> tuple[Aggregation, dict]:
+    """Weighted FedAvg computed through the secure aggregation protocol.
+
+    Each hospital masks (w_u * x_u, w_u); the server only recovers the two sums
+    over the hospitals that did not drop out, and divides them.
+    """
+    n = len(updates)
+    n_drop = int(round(acfg.dropout_rate * n))
+    dropped = set(rng.choice(n, size=n_drop, replace=False).tolist()) if n_drop else set()
+    w = (weights / weights.sum()).cpu().double().numpy()
+    vecs = [np.append(updates[i].cpu().double().numpy() * w[i], w[i]) for i in range(n)]
+    total, stats = secure_sum(vecs, dropped, threshold=int(acfg.threshold_frac * n) + 1)
+    update = torch.from_numpy(total[:-1] / total[-1]).float().to(updates.device)
+    info = {"secagg_seconds": stats.seconds, "secagg_dropped": stats.n_dropped}
+    return Aggregation(update), info
 
 
 def run_local_only(

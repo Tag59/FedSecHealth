@@ -48,8 +48,13 @@ class AggregatorConfig:
     name: str = "fedavg"
     trim_ratio: float = 0.2  # trimmed_mean: fraction removed on *each* side
     n_byzantine: int | None = None  # krum's f; None -> the true number of attackers
-    clip_norm: float | None = None  # norm_clip bound; None -> median update norm
+    clip_norm: float | None = None  # norm_clip / dp_fedavg bound; None -> median update norm
     root_size: int = 100  # fltrust: size of the server's trusted dataset
+    noise_multiplier: float = 0.0  # dp_fedavg: Gaussian noise std = noise_multiplier * clip_norm
+    seed: int = 0  # dp_fedavg noise
+    secure: bool = False  # secure aggregation: the server only ever sees the masked sum
+    dropout_rate: float = 0.0  # secure aggregation: share of hospitals dropping out each round
+    threshold_frac: float = 0.5  # secure aggregation: Shamir threshold t = floor(frac * n) + 1
 
 
 @dataclass
@@ -108,6 +113,21 @@ def norm_clip(updates: torch.Tensor, weights: torch.Tensor, bound: float | None)
     return Aggregation(_weighted_mean(updates * factors[:, None], weights), weights / weights.sum())
 
 
+def dp_fedavg(
+    updates: torch.Tensor, bound: float, noise_multiplier: float, gen: torch.Generator
+) -> Aggregation:
+    """Client-level DP (McMahan et al., ICLR 2018): clip each hospital's update, average, add noise.
+
+    Protects the participation of a whole hospital, not of one patient. With
+    all n hospitals in every round, the sensitivity of the mean is bound / n.
+    """
+    n = len(updates)
+    factors = torch.clamp(bound / (updates.norm(dim=1) + 1e-12), max=1.0)
+    mean = (updates * factors[:, None]).mean(0)
+    noise = torch.randn(mean.shape, generator=gen).to(mean) * noise_multiplier * bound / n
+    return Aggregation(mean + noise, torch.full((n,), 1.0 / n, device=updates.device))
+
+
 def fltrust(updates: torch.Tensor, server_update: torch.Tensor) -> Aggregation:
     s_norm = server_update.norm()
     cos = (updates @ server_update) / (updates.norm(dim=1) * s_norm + 1e-12)
@@ -119,7 +139,16 @@ def fltrust(updates: torch.Tensor, server_update: torch.Tensor) -> Aggregation:
     return Aggregation(w @ rescaled, w)
 
 
-AGGREGATORS = ["fedavg", "median", "trimmed_mean", "krum", "multi_krum", "norm_clip", "fltrust"]
+AGGREGATORS = [
+    "fedavg",
+    "median",
+    "trimmed_mean",
+    "krum",
+    "multi_krum",
+    "norm_clip",
+    "fltrust",
+    "dp_fedavg",
+]
 
 
 class Aggregator:
@@ -128,8 +157,18 @@ class Aggregator:
     def __init__(self, cfg: AggregatorConfig, n_malicious: int = 0) -> None:
         if cfg.name not in AGGREGATORS:
             raise ValueError(f"Unknown aggregator {cfg.name!r}; choose from {AGGREGATORS}")
+        if cfg.secure and cfg.name != "fedavg":
+            raise ValueError(
+                f"Secure aggregation only reveals the sum of updates: {cfg.name!r} needs to "
+                "inspect individual updates and cannot run on top of it."
+            )
+        if cfg.name == "dp_fedavg" and cfg.clip_norm is None:
+            raise ValueError(
+                "dp_fedavg needs a fixed clip_norm (a data-dependent bound is not private)"
+            )
         self.cfg = cfg
         self.f = cfg.n_byzantine if cfg.n_byzantine is not None else n_malicious
+        self.gen = torch.Generator().manual_seed(cfg.seed)
 
     @property
     def needs_server_update(self) -> bool:
@@ -155,6 +194,8 @@ class Aggregator:
             return multi_krum(updates, f, n - f)
         if name == "norm_clip":
             return norm_clip(updates, weights, self.cfg.clip_norm)
+        if name == "dp_fedavg":
+            return dp_fedavg(updates, self.cfg.clip_norm, self.cfg.noise_multiplier, self.gen)
         if server_update is None:
             raise ValueError("fltrust needs the server's root-dataset update")
         return fltrust(updates, server_update)

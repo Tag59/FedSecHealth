@@ -14,10 +14,13 @@ Hospitals want to train models together without sharing patient records.
 Federated Learning (FL) promises exactly that: only model updates leave the
 hospital. **But gradients leak data, and participants can lie.**
 FedSecHealth simulates hospitals collaborating on diagnostic models (clinical
-tables, chest X-rays, blood smears) and attacks them from both sides:
+tables, chest X-rays, blood smears, skin lesions) and attacks them from both sides:
 
 - **Privacy:** an honest-but-curious server **reconstructs patient data from
-  gradients**; defenses: **Differential Privacy (DP-SGD)**.
+  gradients**, and anyone holding a model can test **whether a patient was in
+  the training data**; defenses: **Differential Privacy** (sample- and
+  client-level) and **secure aggregation** (real cryptography: X25519,
+  ChaCha20, Shamir secret sharing).
 - **Integrity:** **malicious hospitals** poison the shared model (sabotage,
   hidden backdoors); defenses: **Byzantine-robust aggregation** (median,
   trimmed mean, Krum, norm clipping, FLTrust).
@@ -25,12 +28,51 @@ tables, chest X-rays, blood smears) and attacks them from both sides:
 Every attack and defense is measured on the same footing: utility, attack
 success, and what each protection costs.
 
+## Which defense protects against what
+
+A summary of the experiments below, plus what follows from how each mechanism
+works where noted (✅ protects, ⚠️ partially or at a high cost, ❌ does not
+protect, · not evaluated):
+
+| Defense | Server inverts a hospital's update | Membership inference on the final model | Server inspects a hospital's local model | Malicious hospitals (poisoning, backdoor) |
+|---|---|---|---|---|
+| Sample-level DP (DP-SGD in each hospital) | ✅ with enough noise (v0.2) | ✅ but accuracy drops (v0.4) | ✅ (v0.4) | · |
+| Client-level DP (DP-FedAvg at the server) | ❌ by design: noise is added after the server sees raw updates | ⚠️ needs many hospitals (v0.4) | ❌ no guarantee, same reason (v0.4) | · |
+| Secure aggregation | ✅ individual updates are hidden (v0.4) | ❌ the model is unchanged (v0.4) | ✅ never revealed | ❌ rules out robust aggregation |
+| Robust aggregation | ❌ | ❌ | ❌ it *requires* inspecting updates | ⚠️ depends on the attack (v0.3) |
+
+No single mechanism covers every threat, and some pull in opposite
+directions: secure aggregation hides exactly the individual updates that
+robust aggregation needs to inspect.
+
 <p align="center"><img src="docs/figures/pneumonia_gallery_ig.png" width="760"></p>
 <p align="center"><em>Chest X-rays reconstructed by the server from single-image gradients
 (Inverting Gradients, PneumoniaMNIST). Top: real images. Rows: increasing DP noise σ and the
 corresponding formal budget ε. Numbers: SSIM to the real image (1 = identical).</em></p>
 
 ## Key findings
+
+**Privacy: membership inference and secure aggregation (v0.4)**
+
+1. **Membership leaks, but calibrated attacks are needed to see it.** Five
+   dermatology clinics (DermaMNIST); with local over-fitting (train 100 %,
+   test 73 %), offline **LiRA** identifies **4.4 %** of clinic 0's patients at
+   a 1 % false-positive rate (AUC 0.67), while the classic loss-threshold
+   attack barely beats chance at that rate (1.4 %). Per-example calibration
+   with shadow models is what makes the attack work.
+2. **Sample-level DP removes the signal, at a real cost.** DP-SGD at ε = 8
+   brings the best attack back to chance (TPR 1.1 % at 1 % FPR) but, without
+   tuning, drops balanced accuracy on this imbalanced dataset from 0.51 to 0.31.
+3. **Client-level DP is the wrong tool for a handful of hospitals.** With 5
+   clinics, DP-FedAvg either gives no meaningful guarantee (σ = 0.1 → ε ≈ 2300)
+   or destroys the model (σ = 1 → ε ≈ 49, balanced accuracy 0.16). Being added
+   at the server, it also leaves each hospital's raw update exposed to that
+   server (3.4 % TPR on the local model).
+4. **Secure aggregation hides individual updates for a modest cost.** The
+   server only learns the sum: same model as FedAvg (0.789 vs. 0.787 balanced
+   accuracy), exact recovery with 30 % of hospitals dropping out every round,
+   0.4 s per round for 10 hospitals and 420 k parameters. A masked upload has
+   a correlation of 0.0003 with the true update.
 
 **Integrity: malicious hospitals (v0.3)**
 
@@ -80,6 +122,55 @@ hospital out of ten is enough.</em></p>
    centralized 0.918. DP-SGD at ε = 16 drops the federated model to 0.690.
 
 ## Results in detail
+
+### Membership inference and secure aggregation (v0.4)
+
+**Membership inference** (DermaMNIST, 5 clinics, 40 rounds × 5 local epochs,
+1,000 members of clinic 0 vs. 1,000 test patients, 16 LiRA shadow models):
+
+<p align="center"><img src="docs/figures/mia_roc_dermamnist.png" width="820"></p>
+
+Loss, confidence and modified entropy rank patients almost identically (loss
+and confidence are monotone transforms of each other), hence overlapping curves.
+What matters is the low false-positive region, where only LiRA clearly beats
+the diagonal.
+
+<p align="center"><img src="docs/figures/mia_defenses_dermamnist.png" width="820"></p>
+
+| Defense | Formal guarantee | Balanced accuracy | Best TPR at 1 % FPR, global model | Best TPR at 1 % FPR, local model (server view) | LiRA AUC, global |
+|---|---|---|---|---|---|
+| None | none | 0.511 | **4.4 %** | 3.5 % | 0.67 |
+| Sample-level DP-SGD | ε = 8 per patient | 0.311 | 1.1 % | 1.4 % | 0.51 |
+| Sample-level DP-SGD | ε = 1 per patient | 0.168 | 1.1 % | 2.7 % | 0.50 |
+| Client-level DP-FedAvg, σ = 0.1 | ε ≈ 2300 per clinic | 0.409 | 2.1 % | 3.4 % | 0.57 |
+| Client-level DP-FedAvg, σ = 1 | ε ≈ 49 per clinic | 0.156 | 0.8 % | 1.0 % | 0.52 |
+
+*Random guessing gives 1 % TPR at 1 % FPR. A milder setting (30 rounds × 2 local
+epochs, train 92 % / test 72 %) gives the same picture with weaker attacks
+(LiRA 3.1 % TPR at 1 % FPR, AUC 0.56). The TPR values come from 1,000 targets, so
+differences of a few tenths of a percent are within noise.*
+
+**Secure aggregation** (PneumoniaMNIST, 10 hospitals, CNN with 420,802 parameters):
+
+| Setting | Balanced accuracy after 20 rounds | Protocol time per round |
+|---|---|---|
+| Plain FedAvg | 0.787 | n/a |
+| Secure aggregation, no dropout | 0.789 | 0.43 s |
+| Secure aggregation, 10 % dropout per round | 0.787 | 0.41 s |
+| Secure aggregation, 30 % dropout per round | 0.794 | 0.35 s |
+
+| Hospitals | 5 | 10 | 20 |
+|---|---|---|---|
+| Protocol time per round | 0.14 s | 0.41 s | 1.89 s |
+| Max. error of the recovered sum | 1.4e-7 | 2.3e-7 | 3.6e-7 |
+
+- The fixed-point encoding (2⁻²⁴ resolution) makes the secure sum differ from
+  the float sum by ~1e-7; over 20 rounds the two trainings stay within 0.012
+  balanced accuracy of each other at every round.
+- Cost grows as O(n²) because every pair of hospitals shares a mask; each
+  upload is 3.4 MB (64-bit fixed point, 2× a float32 update).
+- The masked upload is statistically unrelated to the update it hides
+  (correlation 0.0003), so gradient inversion on it has nothing to work with.
 
 ### Malicious hospitals (v0.3)
 
@@ -251,6 +342,12 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
   adaptive (they ignore which defense is deployed), and the backdoor uses a
   large boost that distance-based rules detect easily. Stealthier, defense-aware
   attacks would lower the robust aggregators' numbers.
+- Membership inference: one seed and 1,000 targets per side; offline LiRA only
+  (shadow models trained on 500 auxiliary images, much less than the target
+  model saw), so the attack is a lower bound on what a stronger adversary gets.
+  DP hyper-parameters were not re-tuned, so the utility cost is pessimistic.
+- Secure aggregation is simulated in one process without network, pairwise
+  encryption or signatures; it assumes a semi-honest server.
 
 ## What's inside
 
@@ -261,9 +358,10 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
 | FL engine | Deterministic FedAvg simulator in pure PyTorch; centralized and local-only baselines; accuracy and balanced accuracy |
 | Attacks | **Analytic** linear-layer inversion, **DLG**, **iDLG**, **Inverting Gradients**; attacks only see what the server sees |
 | Poisoning | Malicious hospitals: **label flipping**, **sign flipping**, **Gaussian** updates, **ALIE**, **backdoor** with trigger + model-replacement boost |
-| Defenses | **DP-SGD** per hospital via Opacus, RDP (ε, δ) accounting; **robust aggregation**: coordinate-wise median, trimmed mean, Krum, Multi-Krum, norm clipping, FLTrust |
+| Membership inference | Loss, confidence, modified entropy, **offline LiRA** with shadow models; ROC AUC and TPR at low FPR; global model vs. one hospital's local model |
+| Defenses | **DP-SGD** per hospital via Opacus, RDP (ε, δ) accounting; **client-level DP** (DP-FedAvg); **secure aggregation** (X25519 key agreement, ChaCha20 masks, Shamir secret sharing, dropout recovery); **robust aggregation**: coordinate-wise median, trimmed mean, Krum, Multi-Krum, norm clipping, FLTrust |
 | Metrics | Relative error / cosine (tabular); PSNR / SSIM with Hungarian matching (images); balanced accuracy, backdoor success with clean baseline, influence kept by attackers |
-| Engineering | `src/` package, typed YAML configs, CLI, 37 tests, CI (ruff + pytest), one-command reproduction |
+| Engineering | `src/` package, typed YAML configs, CLI, 53 tests, CI (ruff + pytest), one-command reproduction |
 
 ## Threat models
 
@@ -279,6 +377,22 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
 - **DP noise in attacks** is calibrated with the *same* schedule as training
   (sampling rate, number of steps, δ = 1e-5), so each ε is the budget a hospital
   would actually spend.
+
+**Membership inference (privacy of the trained model).**
+
+- **Adversary:** anyone holding a trained model: every hospital receives the
+  final global model, and in plain FedAvg the server also receives each
+  hospital's local model. The adversary knows the target's record and label.
+- **Goal:** decide whether the target patient was in a given clinic's training data.
+- **Knowledge:** a pool of auxiliary data from the same distribution (the
+  MedMNIST validation split, disjoint from training and test) to train shadow models.
+- **Success:** true-positive rate at a 1 % false-positive rate, the regime in
+  which an attacker can confidently name patients (Carlini et al., 2022).
+
+**Secure aggregation.** Semi-honest server, in-process simulation: pairwise
+channel encryption and signatures of the full protocol are omitted, the
+cryptographic core (key agreement, masking, secret sharing, unmasking with
+dropouts) is implemented with real primitives.
 
 **Malicious hospitals (integrity).**
 
@@ -299,6 +413,8 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
 ```bash
 git clone https://github.com/Tag59/FedSecHealth && cd FedSecHealth
 uv sync                                               # installs CPU PyTorch + deps
+uv run fedsechealth membership -c configs/dermamnist_membership.yaml # membership inference
+uv run fedsechealth secagg     -c configs/pneumonia_secagg.yaml     # secure aggregation
 uv run fedsechealth robustness -c configs/pneumonia_backdoor.yaml # malicious hospitals
 uv run fedsechealth attack   -c configs/pneumonia_attack.yaml     # X-ray reconstruction
 uv run fedsechealth train    -c configs/bloodmnist_noniid.yaml    # federated training
@@ -325,9 +441,11 @@ src/fedsechealth/
     gradient_inversion.py   analytic, DLG, iDLG, Inverting Gradients
     metrics.py              rel. error, cosine, PSNR, SSIM, batch matching
     poisoning.py            malicious hospitals: label/sign flip, Gaussian, ALIE, backdoor
+    membership.py           membership inference: loss, confidence, entropy, LiRA
   defenses/
-    aggregation.py          FedAvg, median, trimmed mean, (Multi-)Krum, norm clipping, FLTrust
-  experiments.py   train / attack / trade-off / robustness / demo pipelines
+    aggregation.py          FedAvg, median, trimmed mean, (Multi-)Krum, norm clipping, FLTrust, DP-FedAvg
+    secure_aggregation.py   secure aggregation protocol (X25519, ChaCha20, Shamir)
+  experiments.py   train / attack / trade-off / robustness / membership / secagg / demo pipelines
   plotting.py      figures (curves, trade-offs, galleries, noise sweeps, robustness heatmaps)
   cli.py           command-line interface
 configs/           YAML experiment definitions
@@ -337,8 +455,8 @@ tests/             pytest suite
 
 ## Roadmap
 
-Membership inference and secure aggregation, then Flower/Docker deployment and a
-dashboard. See [ROADMAP.md](ROADMAP.md).
+Flower/Docker deployment with TLS between hospitals and server, a dashboard,
+and a technical report. See [ROADMAP.md](ROADMAP.md).
 
 ## References
 
@@ -357,6 +475,12 @@ dashboard. See [ROADMAP.md](ROADMAP.md).
 - Sun et al., *Can You Really Backdoor Federated Learning?*, 2019.
 - Bagdasaryan et al., *How To Backdoor Federated Learning*, AISTATS 2020.
 - Cao et al., *FLTrust: Byzantine-robust Federated Learning via Trust Bootstrapping*, NDSS 2021.
+- Yeom et al., *Privacy Risk in Machine Learning: Analyzing the Connection to Overfitting*, CSF 2018.
+- Song, Mittal, *Systematic Evaluation of Privacy Risks of Machine Learning Models*, USENIX Security 2021.
+- Carlini et al., *Membership Inference Attacks From First Principles*, IEEE S&P 2022.
+- Bonawitz et al., *Practical Secure Aggregation for Privacy-Preserving Machine Learning*, CCS 2017.
+- McMahan et al., *Learning Differentially Private Recurrent Language Models*, ICLR 2018.
+- Shamir, *How to Share a Secret*, Communications of the ACM 1979.
 - Gu, Dolan-Gavitt, Garg, *BadNets: Identifying Vulnerabilities in the Machine Learning Model Supply Chain*, 2017.
 
 ---
@@ -373,11 +497,35 @@ hôpitaux qui collaborent sur des modèles de diagnostic (données cliniques,
 radios thoraciques, frottis sanguins) et les attaque sur deux fronts :
 
 - **Vie privée :** un serveur « honnête mais curieux » **reconstruit les
-  données des patients à partir des gradients** ; défense : la
-  **confidentialité différentielle (DP-SGD)**.
+  données des patients à partir des gradients**, et quiconque détient un
+  modèle peut tester **si un patient faisait partie des données
+  d'entraînement** ; défenses : la **confidentialité différentielle** (par
+  patient ou par hôpital) et l'**agrégation sécurisée** (vraie cryptographie :
+  X25519, ChaCha20, partage de secret de Shamir).
 - **Intégrité :** des **hôpitaux malveillants** empoisonnent le modèle commun
   (sabotage, backdoors cachées) ; défenses : l'**agrégation robuste** (médiane,
   moyenne tronquée, Krum, clipping de norme, FLTrust).
+
+### Résultats principaux : inférence d'appartenance et agrégation sécurisée (v0.4)
+
+1. **L'appartenance fuit, mais il faut une attaque calibrée pour le voir.**
+   Avec cinq cliniques de dermatologie et un sur-apprentissage local (100 %
+   en entraînement, 73 % en test), **LiRA** identifie **4,4 %** des patients
+   de la clinique 0 pour 1 % de faux positifs (AUC 0,67), là où l'attaque
+   classique par seuil de perte fait à peine mieux que le hasard (1,4 %).
+2. **La DP par patient supprime le signal, mais coûte cher.** À ε = 8,
+   l'attaque retombe au niveau du hasard, et la précision équilibrée chute de
+   0,51 à 0,31 sur ce jeu déséquilibré, sans réglage spécifique.
+3. **La DP par hôpital n'est pas adaptée à quelques hôpitaux.** Avec 5
+   cliniques, elle ne garantit rien (σ = 0,1 → ε ≈ 2300) ou détruit le modèle
+   (σ = 1 → ε ≈ 49). Ajoutée côté serveur, elle ne protège pas non plus les
+   mises à jour brutes que ce serveur reçoit.
+4. **L'agrégation sécurisée cache chaque mise à jour pour un coût modeste.**
+   Le serveur n'apprend que la somme : même modèle que FedAvg (0,789 contre
+   0,787), reconstruction exacte avec 30 % d'hôpitaux qui décrochent à chaque
+   round, 0,4 s par round pour 10 hôpitaux. Mais elle empêche l'agrégation
+   robuste, qui a besoin de voir chaque mise à jour : aucune défense ne couvre
+   toutes les menaces.
 
 ### Résultats principaux : hôpitaux malveillants (v0.3)
 
@@ -432,7 +580,11 @@ hyperparamètres de la DP n'ont pas été optimisés pour l'imagerie : le coût 
 précision rapporté ici est donc une borne haute. Pour l'empoisonnement : 2
 graines pour les grilles, 1 pour les balayages, et des attaquants non adaptatifs
 (ils ignorent la défense déployée) ; la backdoor utilise un fort facteur
-d'amplification, facile à détecter pour les règles fondées sur les distances.
+d'amplification, facile à détecter pour les règles fondées sur les distances. Pour l'inférence
+d'appartenance : une graine, 1 000 cibles de chaque côté et LiRA hors ligne
+seulement, donc une borne basse de ce qu'obtiendrait un attaquant plus fort.
+L'agrégation sécurisée est simulée dans un seul processus, sans réseau ni
+chiffrement des canaux entre hôpitaux, avec un serveur supposé semi-honnête.
 
 ### Modèles de menace
 
@@ -456,6 +608,8 @@ dépensé par un hôpital.
 
 ```bash
 uv sync
+uv run fedsechealth membership -c configs/dermamnist_membership.yaml
+uv run fedsechealth secagg     -c configs/pneumonia_secagg.yaml
 uv run fedsechealth robustness -c configs/pneumonia_backdoor.yaml
 uv run fedsechealth attack   -c configs/pneumonia_attack.yaml
 uv run fedsechealth train    -c configs/bloodmnist_noniid.yaml
@@ -464,8 +618,8 @@ uv run fedsechealth tradeoff -c configs/breast_cancer_iid.yaml
 
 ### Feuille de route
 
-Inférence d'appartenance et agrégation sécurisée, puis déploiement
-Flower/Docker et tableau de bord. Voir [ROADMAP.md](ROADMAP.md).
+Déploiement Flower/Docker avec TLS entre hôpitaux et serveur, tableau de
+bord et rapport technique. Voir [ROADMAP.md](ROADMAP.md).
 
 ## License
 

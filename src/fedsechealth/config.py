@@ -64,6 +64,28 @@ class RobustnessConfig:
 
 
 @dataclass
+class MembershipConfig:
+    """``fedsechealth membership``: membership inference against each defense."""
+
+    attacks: list[str] = field(default_factory=lambda: ["loss", "confidence", "entropy", "lira"])
+    n_targets: int = 1000  # members (from target_client) and as many non-members (test set)
+    target_client: int = 0
+    n_shadows: int = 16  # LiRA shadow models, trained on random halves of the auxiliary data
+    shadow_epochs: int = 30
+    sample_dp_epsilons: list[float] = field(default_factory=lambda: [1.0, 8.0])
+    client_dp_noise: list[float] = field(default_factory=lambda: [0.1, 1.0])
+    client_dp_clip: float = 1.0
+
+
+@dataclass
+class SecAggConfig:
+    """``fedsechealth secagg``: cost and correctness of secure aggregation."""
+
+    dropout_rates: list[float] = field(default_factory=lambda: [0.0, 0.1, 0.3])
+    benchmark_clients: list[int] = field(default_factory=lambda: [5, 10, 20])
+
+
+@dataclass
 class ExperimentConfig:
     name: str = "default"
     output_dir: str = "results"
@@ -74,6 +96,8 @@ class ExperimentConfig:
     adversary: AdversaryConfig = field(default_factory=AdversaryConfig)
     aggregator: AggregatorConfig = field(default_factory=AggregatorConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
+    membership: MembershipConfig = field(default_factory=MembershipConfig)
+    secagg: SecAggConfig = field(default_factory=SecAggConfig)
 
 
 def _build(cls, data: dict[str, Any]):
@@ -107,6 +131,8 @@ def load_config(
         "adversary": AdversaryConfig,
         "aggregator": AggregatorConfig,
         "robustness": RobustnessConfig,
+        "membership": MembershipConfig,
+        "secagg": SecAggConfig,
     }
     built = {key: _build(cls, raw.pop(key, {}) or {}) for key, cls in sections.items()}
     return _build(ExperimentConfig, {**raw, "fl": fl, **built})

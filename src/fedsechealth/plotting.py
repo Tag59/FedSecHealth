@@ -329,3 +329,79 @@ def plot_robustness_sweep(result: dict, attack: str, key: str, path: Path) -> Pa
     # Outside the plot: overlapping lines (e.g. Krum and Multi-Krum at 0) stay identifiable.
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0))
     return _save(fig, path)
+
+
+# --------------------------------------------------------------------------- membership inference
+
+MIA_LABELS = {
+    "loss": "Loss",
+    "confidence": "Confidence",
+    "entropy": "Modified entropy",
+    "lira": "LiRA (offline)",
+}
+VIEW_LABELS = {"global": "Final global model", "local": "Hospital's local model (server view)"}
+
+
+def plot_mia_roc(result: dict, path: Path) -> Path:
+    """Log-log ROC curves without defense: global model vs. one hospital's local model."""
+    row = next(r for r in result["results"] if r["defense"] == "none")
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
+    for ax, view in zip(axes, ("global", "local"), strict=True):
+        attacks = row["views"][view]["attacks"]
+        for i, (a, res) in enumerate(attacks.items()):
+            fpr, tpr = np.asarray(res["roc"]["fpr"]), np.asarray(res["roc"]["tpr"])
+            keep = fpr > 0
+            ax.plot(
+                fpr[keep],
+                np.maximum(tpr[keep], 1e-4),
+                color=PALETTE_8[i],
+                label=(
+                    f"{MIA_LABELS.get(a, a)}: AUC {res['auc']:.2f}, TPR@1% {res['tpr_at_1fpr']:.1%}"
+                ),
+            )
+        ax.plot(
+            [1e-4, 1], [1e-4, 1], color=NEUTRAL, linestyle="--", linewidth=1, label="Random guess"
+        )
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(1e-3, 1)
+        ax.set_ylim(1e-3, 1.05)
+        ax.set_xlabel("False positive rate")
+        ax.set_title(VIEW_LABELS[view], fontsize=10)
+        ax.legend(fontsize=7.5, loc="lower right")
+    axes[0].set_ylabel("True positive rate")
+    fig.suptitle(
+        f"Membership inference on {result['dataset']} (no defense)", color=TEXT, fontweight="bold"
+    )
+    return _save(fig, path)
+
+
+def plot_mia_defenses(result: dict, path: Path) -> Path:
+    """Best attack's TPR at 1 % FPR (per view) and model utility, for each defense."""
+    rows, metric = result["results"], result["metric"]
+
+    def label(r: dict) -> str:
+        name = r["defense"].replace("eps=", "ε=").replace("sigma=", "σ=")
+        if r.get("client_epsilon") is not None:
+            name += f"\n(client ε={r['client_epsilon']:.0f})"
+        return name
+
+    names = [label(r) for r in rows]
+    x = np.arange(len(rows))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
+    for i, view in enumerate(("global", "local")):
+        best = [max(a["tpr_at_1fpr"] for a in r["views"][view]["attacks"].values()) for r in rows]
+        ax1.plot(x, best, color=PALETTE_8[i], marker="o", markersize=7, label=VIEW_LABELS[view])
+    ax1.axhline(0.01, color=NEUTRAL, linestyle="--", linewidth=1, label="Random guess (1 %)")
+    ax1.set_xticks(x, names, rotation=25, ha="right", fontsize=8)
+    ax1.set_ylabel("Best attack: TPR at 1 % FPR")
+    ax1.set_title("Privacy: patients identified confidently", fontsize=10)
+    ax1.legend(fontsize=8)
+    ax2.plot(x, [r[metric] for r in rows], color=PALETTE_8[2], marker="o", markersize=7)
+    ax2.set_xticks(x, names, rotation=25, ha="right", fontsize=8)
+    ax2.set_ylabel(METRIC_LABELS[metric])
+    ax2.set_title("Utility: global model", fontsize=10)
+    fig.suptitle(
+        f"Membership inference vs. defenses ({result['dataset']})", color=TEXT, fontweight="bold"
+    )
+    return _save(fig, path)

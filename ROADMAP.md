@@ -23,7 +23,7 @@ Each milestone is a self-contained, presentable release.
 - [ ] LPIPS (needs pretrained weights), label inference for batches (Wainakh et al.)
 - [ ] GPU support (ROCm/CUDA) tested on real hardware, see `docs/GPU.md`
 
-## v0.3: Malicious hospitals (integrity, current)
+## v0.3: Malicious hospitals (integrity, done)
 - [x] Byzantine clients: label flipping, sign flipping, Gaussian updates, ALIE (Baruch et al., 2019)
 - [x] Backdoor (trigger) attacks with model-replacement boosting (Bagdasaryan et al., 2020)
 - [x] Robust aggregation: coordinate-wise median, trimmed mean, Krum / Multi-Krum, norm clipping, FLTrust
@@ -32,11 +32,14 @@ Each milestone is a self-contained, presentable release.
 - [ ] Adaptive attacks aware of the defense (e.g. FLTrust-aware, Fang et al. 2020)
 - [ ] Combining DP with robust aggregation
 
-## v0.4: Advanced privacy
-- [ ] Membership inference (loss/threshold and shadow models; LiRA-style)
-- [ ] Secure aggregation (pairwise masking, Bonawitz et al., 2017): what it does and does not protect
-- [ ] Client-level vs. sample-level DP; DP-FedAvg with server-side noise
+## v0.4: Advanced privacy (current)
+- [x] Membership inference: loss, confidence, modified entropy, offline LiRA with shadow models
+- [x] Evaluation at low false-positive rates (TPR at 1 % FPR), global model vs. a hospital's local model
+- [x] Secure aggregation (Bonawitz et al., 2017): X25519 key agreement, ChaCha20 masks, Shamir-shared secrets, dropout recovery
+- [x] Client-level DP (DP-FedAvg) vs. sample-level DP (DP-SGD)
+- [ ] Online LiRA (shadow models trained with and without each target)
 - [ ] Gradient compression / pruning as a (weak) defense, for comparison
+- [ ] Distributed DP (noise added by hospitals under secure aggregation)
 
 ## v0.5: Realistic deployment and presentation
 - [ ] Flower deployment (`ServerApp` / `ClientApp`) reusing the same hospital logic; Docker Compose with one container per hospital
