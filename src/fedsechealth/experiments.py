@@ -22,13 +22,17 @@ from .attacks import (
     match_batch,
     tabular_metrics,
 )
+from .attacks.membership import mia_metrics, mia_scores, model_logits
 from .config import ExperimentConfig
 from .data import ClientData, FederatedDataset, load_federated_dataset
-from .defenses import Aggregator
-from .fl import run_centralized, run_federated, run_local_only
+from .defenses import Aggregator, AggregatorConfig
+from .defenses.secure_aggregation import SecAggClient, decode, secure_sum
+from .fl import Hospital, run_centralized, run_federated, run_local_only
 from .models import build_model
 from .plotting import (
     plot_gallery,
+    plot_mia_defenses,
+    plot_mia_roc,
     plot_noise_sweep,
     plot_robustness_heatmap,
     plot_robustness_sweep,
@@ -442,6 +446,213 @@ def experiment_robustness(cfg: ExperimentConfig, log: Log = print) -> dict:
             if attack == "backdoor":
                 plot_robustness_sweep(result, attack, metric, out / f"sweep_{attack}_{metric}.png")
     log(f"saved to {out}")
+    return result
+
+
+# --------------------------------------------------------------------------- membership
+
+
+def _downsample_roc(roc: dict, n: int = 200) -> dict:
+    """Keep ~n points of an ROC curve, log-spaced in FPR (the low-FPR region matters)."""
+    fpr, tpr = np.asarray(roc["fpr"]), np.asarray(roc["tpr"])
+    grid = np.unique(np.r_[0.0, np.logspace(-4, 0, n)])
+    return {"fpr": grid.tolist(), "tpr": np.interp(grid, fpr, tpr).tolist()}
+
+
+def _train_shadows(fds: FederatedDataset, cfg: ExperimentConfig, device, seed: int) -> list:
+    """LiRA shadow models: same architecture, trained on random halves of the auxiliary data."""
+    m = cfg.membership
+    if fds.x_aux is None:
+        raise ValueError("LiRA needs auxiliary data (MedMNIST validation split)")
+    mf = _model_fn(fds, cfg)
+    rng = np.random.default_rng(seed + 999)
+    shadows = []
+    shadow_cfg = replace(cfg.fl, dp=DPConfig(enabled=False))
+    for k in range(m.n_shadows):
+        idx = rng.choice(len(fds.y_aux), size=len(fds.y_aux) // 2, replace=False)
+        torch.manual_seed(seed * 100 + k)
+        h = Hospital(
+            ClientData(-2, fds.x_aux[idx], fds.y_aux[idx]),
+            mf,
+            replace(shadow_cfg, seed=seed * 100 + k),
+            device,
+        )
+        state = mf().to(device).state_dict()
+        for _ in range(m.shadow_epochs):
+            state = h.fit(state)
+        shadows.append(h.base_model)
+    return shadows
+
+
+def _membership_defenses(cfg: ExperimentConfig, n_client_samples: int):
+    """(name, FL config, aggregator, client-level epsilon or None)."""
+    m, f = cfg.membership, cfg.fl
+    yield "none", f, None, None
+    for eps in m.sample_dp_epsilons:
+        dp = replace(f.dp, enabled=True, target_epsilon=eps)
+        yield f"sample-DP eps={eps:g}", replace(f, dp=dp), None, None
+    for z in m.client_dp_noise:
+        agg = AggregatorConfig("dp_fedavg", clip_norm=m.client_dp_clip, noise_multiplier=z)
+        eps = epsilon_for(z, 1.0, f.rounds, f.dp.target_delta)
+        yield f"client-DP sigma={z:g}", f, agg, eps
+
+
+def experiment_membership(cfg: ExperimentConfig, log: Log = print) -> dict:
+    """Membership inference against the global model and one hospital's local model.
+
+    Members: patients of ``target_client``; non-members: test-set patients the
+    federation never saw. Attacks run under each defense: none, sample-level
+    DP-SGD (inside each hospital) and client-level DP-FedAvg (at the server).
+    """
+    device = get_device(cfg.fl.device)
+    m = cfg.membership
+    seed = cfg.seeds[0]
+    set_seed(seed)
+    fds = _dataset(cfg, seed)
+    mf = _model_fn(fds, cfg)
+    rng = np.random.default_rng(seed + 4242)
+    client = fds.clients[m.target_client]
+    n_t = min(m.n_targets, len(client), len(fds.y_test) // 2)
+    mem = rng.choice(len(client), size=n_t, replace=False)
+    non = rng.choice(len(fds.y_test), size=n_t, replace=False)
+    xm, ym = client.x[mem], client.y[mem]
+    xn, yn = fds.x_test[non], fds.y_test[non]
+
+    shadows = []
+    if "lira" in m.attacks:
+        log(f"training {m.n_shadows} shadow models on the auxiliary data ...")
+        shadows = _train_shadows(fds, cfg, device, seed)
+    shadow_m = [model_logits(s, xm, device) for s in shadows]
+    shadow_n = [model_logits(s, xn, device) for s in shadows]
+
+    results = []
+    for name, fl_cfg, agg_cfg, client_eps in _membership_defenses(cfg, len(client)):
+        fl_cfg = replace(fl_cfg, seed=seed)
+        agg = Aggregator(agg_cfg) if agg_cfg else None
+        model, hist, local_states = run_federated(
+            fds, mf, fl_cfg, device, aggregator=agg, return_local=True
+        )
+        local = mf().to(device)
+        local.load_state_dict(local_states[m.target_client])
+        metric = _metric(fds)
+        row = {
+            "defense": name,
+            metric: hist[-1][metric],
+            "sample_epsilon": hist[-1].get("epsilon"),
+            "client_epsilon": client_eps,
+            "views": {},
+        }
+        for view, net in (("global", model), ("local", local)):
+            lm, ln = model_logits(net, xm, device), model_logits(net, xn, device)
+            train_acc = float((lm.argmax(1) == ym).mean())
+            test_acc = float((ln.argmax(1) == yn).mean())
+            attacks = {}
+            for a in m.attacks:
+                sm = mia_scores(a, lm, ym, shadow_m)
+                sn = mia_scores(a, ln, yn, shadow_n)
+                res = mia_metrics(sm, sn)
+                res["roc"] = _downsample_roc(res["roc"])
+                attacks[a] = res
+            row["views"][view] = {"train_acc": train_acc, "test_acc": test_acc, "attacks": attacks}
+            best = max(attacks.items(), key=lambda kv: kv[1]["tpr_at_1fpr"])
+            log(
+                f"{name:>22} {view:>6}: {metric}={hist[-1][metric]:.3f} "
+                f"gap={train_acc - test_acc:+.3f} "
+                + " ".join(
+                    f"{a}:auc={r['auc']:.3f}/tpr1={r['tpr_at_1fpr']:.3f}"
+                    for a, r in attacks.items()
+                )
+                + f" | best={best[0]}"
+            )
+        results.append(row)
+
+    result = {
+        "dataset": cfg.data.name,
+        "n_clients": cfg.data.n_clients,
+        "n_targets": n_t,
+        "metric": _metric(fds),
+        "rounds": cfg.fl.rounds,
+        "results": results,
+    }
+    out = _out(cfg)
+    save_json(result, out / "membership.json")
+    plot_mia_roc(result, out / "mia_roc.png")
+    plot_mia_defenses(result, out / "mia_defenses.png")
+    log(f"saved to {out}")
+    return result
+
+
+# --------------------------------------------------------------------------- secure aggregation
+
+
+def experiment_secagg(cfg: ExperimentConfig, log: Log = print) -> dict:
+    """Secure aggregation: same model as FedAvg, dropout tolerance, and cost."""
+    device = get_device(cfg.fl.device)
+    s = cfg.secagg
+    seed = cfg.seeds[0]
+    set_seed(seed)
+    fds = _dataset(cfg, seed)
+    mf = _model_fn(fds, cfg)
+    metric = _metric(fds)
+    fl_cfg = replace(cfg.fl, seed=seed)
+
+    runs = []
+    _, plain = run_federated(fds, mf, fl_cfg, device, aggregator=Aggregator(AggregatorConfig()))
+    runs.append({"setting": "plain FedAvg", metric: plain[-1][metric], "seconds_per_round": 0.0})
+    log(f"plain FedAvg: {metric}={plain[-1][metric]:.4f}")
+    for rate in s.dropout_rates:
+        agg = Aggregator(replace(cfg.aggregator, name="fedavg", secure=True, dropout_rate=rate))
+        _, hist = run_federated(fds, mf, fl_cfg, device, aggregator=agg)
+        sec = float(np.mean([h["secagg_seconds"] for h in hist]))
+        runs.append(
+            {
+                "setting": f"SecAgg, {rate:.0%} dropout",
+                "dropout_rate": rate,
+                metric: hist[-1][metric],
+                "max_round_gap_vs_plain": float(
+                    max(abs(a[metric] - b[metric]) for a, b in zip(hist, plain, strict=True))
+                )
+                if rate == 0
+                else None,
+                "seconds_per_round": sec,
+                "dropped_per_round": hist[-1]["secagg_dropped"],
+            }
+        )
+        log(f"SecAgg dropout={rate:.0%}: {metric}={hist[-1][metric]:.4f} ({sec:.2f} s/round)")
+
+    # What a single masked upload reveals, and how cost scales with the number of hospitals.
+    d = int(sum(p.numel() for p in mf().parameters()))
+    rng = np.random.default_rng(seed)
+    bench = []
+    for n in s.benchmark_clients:
+        xs = [rng.normal(scale=0.01, size=d) for _ in range(n)]
+        total, stats = secure_sum(xs)
+        bench.append(
+            {
+                "n_clients": n,
+                "seconds": stats.seconds,
+                "upload_mb_per_client": stats.upload_bytes_per_client / 1e6,
+                "max_abs_error": float(np.abs(total - np.sum(xs, axis=0)).max()),
+            }
+        )
+        log(f"benchmark n={n}: {stats.seconds:.2f} s, err={bench[-1]['max_abs_error']:.1e}")
+    c0, c1 = SecAggClient(0), SecAggClient(1)
+    x = rng.normal(scale=0.01, size=d)
+    masked = decode(c0.masked_input(x, {0: c0.pk, 1: c1.pk}))
+    leak = float(np.corrcoef(masked, x)[0, 1])
+    log(f"correlation between a masked upload and the true update: {leak:+.4f}")
+
+    result = {
+        "dataset": cfg.data.name,
+        "n_clients": cfg.data.n_clients,
+        "n_parameters": d,
+        "metric": metric,
+        "runs": runs,
+        "benchmark": bench,
+        "masked_update_correlation": leak,
+    }
+    save_json(result, _out(cfg) / "secagg.json")
+    log(f"saved to {_out(cfg)}")
     return result
 
 
