@@ -51,6 +51,18 @@ def robustness(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt)
 
 
 @app.command()
+def membership(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt) -> None:
+    """Membership inference (loss, confidence, entropy, LiRA) against each privacy defense."""
+    experiments.experiment_membership(_cfg(config, set_), log=console.print)
+
+
+@app.command()
+def secagg(config: Path | None = ConfigOpt, set_: list[str] | None = SetOpt) -> None:
+    """Secure aggregation: correctness, dropout tolerance and cost."""
+    experiments.experiment_secagg(_cfg(config, set_), log=console.print)
+
+
+@app.command()
 def demo(
     config: Path | None = ConfigOpt,
     set_: list[str] | None = SetOpt,
