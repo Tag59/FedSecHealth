@@ -18,7 +18,8 @@ dependencies = [
     "medmnist>=3.0.2",
     "torchvision>=0.29.0",
     "scipy>=1.17.1",
-    "cryptography>=50.0.1",
+    "cryptography>=42",
+    "flwr>=1.20",
 ]
 
 [project.scripts]
@@ -54,4 +55,4 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["ignore:Full backward hook is firing", "ignore:Secure RNG turned off"]
+filterwarnings = ["ignore:Full backward hook is firing", "ignore:Secure RNG turned off", "ignore::DeprecationWarning:typer"]

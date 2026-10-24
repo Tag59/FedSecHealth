@@ -32,7 +32,7 @@ Each milestone is a self-contained, presentable release.
 - [ ] Adaptive attacks aware of the defense (e.g. FLTrust-aware, Fang et al. 2020)
 - [ ] Combining DP with robust aggregation
 
-## v0.4: Advanced privacy (current)
+## v0.4: Advanced privacy (done)
 - [x] Membership inference: loss, confidence, modified entropy, offline LiRA with shadow models
 - [x] Evaluation at low false-positive rates (TPR at 1 % FPR), global model vs. a hospital's local model
 - [x] Secure aggregation (Bonawitz et al., 2017): X25519 key agreement, ChaCha20 masks, Shamir-shared secrets, dropout recovery
@@ -41,8 +41,16 @@ Each milestone is a self-contained, presentable release.
 - [ ] Gradient compression / pruning as a (weak) defense, for comparison
 - [ ] Distributed DP (noise added by hospitals under secure aggregation)
 
-## v0.5: Realistic deployment and presentation
-- [ ] Flower deployment (`ServerApp` / `ClientApp`) reusing the same hospital logic; Docker Compose with one container per hospital
-- [ ] TLS between hospitals and server, threat model document (STRIDE)
-- [ ] Streamlit dashboard: run scenarios, visualise reconstructions live
+## v0.5: Realistic deployment (current)
+- [x] Flower deployment (`ServerApp` / `ClientApp`) reusing the same hospital logic (Flower 1.38, Message API)
+- [x] TLS between hospitals and server with a private CA; control API restricted to localhost
+- [x] Docker Compose: one container per hospital, non-root, read-only filesystem, no runtime installs
+- [x] DP-SGD in the deployment with accounting that survives ClientApp restarts
+- [x] Robust aggregation in the deployment (Flower's median, trimmed mean, Krum, Multi-Krum)
+- [x] STRIDE threat model linked to the experiments (`docs/THREAT_MODEL.md`)
+- [ ] SuperNode authentication (per-hospital keys)
+- [ ] Secure aggregation inside the Flower deployment (Flower SecAgg+)
+
+## v0.6: Presentation
+- [ ] Streamlit dashboard: run scenarios, browse results and reconstructions
 - [ ] Technical report (≈8 pages, paper style) + slide deck for interviews

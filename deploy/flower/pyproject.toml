@@ -1,0 +1,45 @@
+# Flower App wrapping the FedSecHealth hospital logic.
+# The code lives in the installed `fedsechealth` package (src/fedsechealth/flower);
+# this directory only declares the app so that `flwr run` can ship it to the SuperLink.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fedsechealth-flower"
+version = "0.5.0"
+description = "FedSecHealth hospitals and aggregation server as a Flower App"
+license = { file = "LICENSE" }
+dependencies = ["fedsechealth", "flwr>=1.38"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.flwr.app]
+publisher = "tag59"
+fab-format-version = 1
+flwr-version-target = "1.38.0"
+
+[tool.flwr.app.components]
+serverapp = "fedsechealth.flower.server_app:app"
+clientapp = "fedsechealth.flower.client_app:app"
+
+[tool.flwr.app.config]
+num-hospitals = 3
+num-server-rounds = 10
+dataset = "pneumoniamnist"
+partition = "iid"
+alpha = 0.5
+seed = 0
+model = "cnn"
+local-epochs = 1
+batch-size = 32
+learning-rate = 0.05
+strategy = "fedavg"        # fedavg | median | trimmed_mean | krum | multi_krum
+n-byzantine = 0            # Krum / Multi-Krum: number of malicious hospitals to tolerate
+trim = 0.2                 # trimmed_mean: fraction trimmed on each side
+dp-enabled = false         # DP-SGD inside every hospital
+dp-epsilon = 8.0
+dp-delta = 1e-5
+dp-max-grad-norm = 1.0
+output = "results/flower_deployment/history.json"

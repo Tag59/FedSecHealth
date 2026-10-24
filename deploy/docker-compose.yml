@@ -1,0 +1,66 @@
+# FedSecHealth deployment: one container per hospital + one aggregation server.
+#
+#   bash deploy/docker_up.sh           # certificates, results dir, build, start
+#   bash deploy/run_docker.sh          # submits the Flower App and streams the logs
+#   docker compose -f deploy/docker-compose.yml down
+#
+# Security choices: TLS on every connection (private CA), hospitals expose no
+# port, only the SuperLink control API is published and only on 127.0.0.1,
+# read-only data and certificates, non-root user, no runtime package installs.
+
+x-hospital: &hospital
+  image: fedsechealth:0.5
+  depends_on: [superlink]
+  networks: [federation]
+  read_only: true
+  tmpfs: ["/tmp:uid=1000,gid=1000,mode=0700", "/home/hospital:uid=1000,gid=1000,mode=0700"]
+  volumes:
+    - ./certs/ca.crt:/certs/ca.crt:ro
+    - ${MEDMNIST_ROOT:-${HOME}/.medmnist}:/data/medmnist:ro
+  restart: unless-stopped
+
+services:
+  superlink:
+    image: fedsechealth:0.5
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: >
+      flower-superlink
+      --disable-runtime-dependency-installation
+      --ssl-ca-certfile /certs/ca.crt
+      --ssl-certfile /certs/server.crt
+      --ssl-keyfile /certs/server.key
+      --fleet-api-address 0.0.0.0:9092
+      --host 0.0.0.0 --port 8000
+    ports:
+      - "127.0.0.1:8000:8000"   # control API for `flwr run`, local machine only
+    networks: [federation]
+    volumes:
+      - ./certs:/certs:ro
+      - ${MEDMNIST_ROOT:-${HOME}/.medmnist}:/data/medmnist:ro   # central test set, for monitoring
+      - ../results/flower_deployment_docker:/app/results/flower_deployment_docker
+    tmpfs: ["/tmp:uid=1000,gid=1000,mode=0700", "/home/hospital:uid=1000,gid=1000,mode=0700"]
+    restart: unless-stopped
+
+  hospital-0:
+    <<: *hospital
+    command: >
+      flower-supernode --superlink superlink:9092 --root-certificates /certs/ca.crt
+      --node-config "partition-id=0 num-partitions=3"
+
+  hospital-1:
+    <<: *hospital
+    command: >
+      flower-supernode --superlink superlink:9092 --root-certificates /certs/ca.crt
+      --node-config "partition-id=1 num-partitions=3"
+
+  hospital-2:
+    <<: *hospital
+    command: >
+      flower-supernode --superlink superlink:9092 --root-certificates /certs/ca.crt
+      --node-config "partition-id=2 num-partitions=3"
+
+networks:
+  federation:
+    driver: bridge

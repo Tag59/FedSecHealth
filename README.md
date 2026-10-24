@@ -26,7 +26,9 @@ tables, chest X-rays, blood smears, skin lesions) and attacks them from both sid
   trimmed mean, Krum, norm clipping, FLTrust).
 
 Every attack and defense is measured on the same footing: utility, attack
-success, and what each protection costs.
+success, and what each protection costs. The same hospital code also runs as a
+**real deployment**: Flower, one Docker container per hospital, TLS with a
+private CA, and a [STRIDE threat model](docs/THREAT_MODEL.md).
 
 ## Which defense protects against what
 
@@ -328,6 +330,59 @@ gradient (norm ≤ 1) is spread over ~4 k parameters, while noise (σ ≈ 0.6) i
 added to every coordinate. Heterogeneity makes DP more expensive: at ε = 1,
 accuracy is 95.4 % IID but 87.9 % non-IID.
 
+## Deployment (v0.5)
+
+The simulator runs every hospital in one process, which is what the research
+experiments need. `src/fedsechealth/flower/` wraps the **same** hospital logic
+(local training, optional DP-SGD) as a Flower `ClientApp`, so each hospital runs
+as its own process or container and only exchanges model weights with the
+server, over gRPC with TLS.
+
+```
+ hospital-0 ─┐  SuperNode: holds its own shard, trains locally (optional DP-SGD)
+ hospital-1 ─┼─ TLS, gRPC :9092 ─▶ superlink ─▶ ServerApp: FedAvg / median /
+ hospital-2 ─┘  (server cert signed    │          trimmed mean / Krum / Multi-Krum
+                 by a private CA)      └─ HTTPS :8000 on 127.0.0.1 only ◀─ flwr run
+```
+
+**Run it locally** (separate processes, TLS, about 40 s for 3 rounds):
+
+```bash
+bash deploy/run_local.sh                                   # 3 hospitals, 10 rounds, FedAvg
+N_HOSPITALS=5 ROUNDS=20 STRATEGY=median bash deploy/run_local.sh
+DP=true DP_EPSILON=8 bash deploy/run_local.sh              # DP-SGD in every hospital
+```
+
+**Run it with Docker** (one container per hospital; image 2.4 GB, CPU-only PyTorch):
+
+```bash
+bash deploy/docker_up.sh                         # certificates, image, server + 3 hospitals
+bash deploy/run_docker.sh                        # submit the app, stream the rounds
+docker compose -f deploy/docker-compose.yml down
+```
+
+| Check | Result |
+|---|---|
+| 3 hospitals + server over TLS, PneumoniaMNIST, 10 rounds | balanced accuracy **0.806** (0.501 before training) |
+| DP-SGD in every hospital, target ε = 8, 4 rounds | per-round ε 5.64 → 6.58 → 7.31 → **7.94**: the budget accumulates across rounds and stays below the target |
+| Robust aggregation in the deployment | `STRATEGY=median / trimmed_mean / krum / multi_krum` maps to Flower's built-in rules |
+| Same run in Docker (4 containers) | identical round-by-round accuracies to the local run (e.g. 0.7872 after 4 rounds): both modes execute the same computation |
+| Container hardening, checked inside a running hospital | UID 1000, read-only root filesystem, data and certificates read-only, only `ca.crt` visible (never the server key), no published port |
+
+Security choices, all motivated in the [threat model](docs/THREAT_MODEL.md):
+
+- **TLS everywhere** with a private CA; hospitals verify the server certificate
+  (names `superlink`, `localhost`, `127.0.0.1`).
+- **No runtime package installation** (`--disable-runtime-dependency-installation`):
+  the server never pulls the dependencies a submitted app declares; everything
+  runs in the environment pinned by `uv.lock`.
+- **Least privilege in containers**: non-root user, read-only root filesystem,
+  data and certificates mounted read-only, hospitals publish no port, and the
+  control API is bound to 127.0.0.1.
+- **DP accounting survives process restarts**: the number of DP-SGD steps is
+  kept in the node's persistent Flower state and restored into Opacus'
+  accountant, so ε is never reset between rounds.
+
 ## Limitations
 
 - Attacks observe a single local gradient step (FedSGD), the standard worst-case
@@ -347,7 +402,11 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
   model saw), so the attack is a lower bound on what a stronger adversary gets.
   DP hyper-parameters were not re-tuned, so the utility cost is pessimistic.
 - Secure aggregation is simulated in one process without network, pairwise
-  encryption or signatures; it assumes a semi-honest server.
+  encryption or signatures; it assumes a semi-honest server. It is not yet
+  wired into the Flower deployment.
+- Deployment: SuperNodes are not authenticated yet (TLS authenticates the
+  server only), and every container derives its shard from the same dataset
+  instead of reading hospital-specific files.
 
 ## What's inside
 
@@ -361,7 +420,8 @@ accuracy is 95.4 % IID but 87.9 % non-IID.
 | Membership inference | Loss, confidence, modified entropy, **offline LiRA** with shadow models; ROC AUC and TPR at low FPR; global model vs. one hospital's local model |
 | Defenses | **DP-SGD** per hospital via Opacus, RDP (ε, δ) accounting; **client-level DP** (DP-FedAvg); **secure aggregation** (X25519 key agreement, ChaCha20 masks, Shamir secret sharing, dropout recovery); **robust aggregation**: coordinate-wise median, trimmed mean, Krum, Multi-Krum, norm clipping, FLTrust |
 | Metrics | Relative error / cosine (tabular); PSNR / SSIM with Hungarian matching (images); balanced accuracy, backdoor success with clean baseline, influence kept by attackers |
-| Engineering | `src/` package, typed YAML configs, CLI, 53 tests, CI (ruff + pytest), one-command reproduction |
+| Deployment | **Flower** SuperLink / SuperNodes, **Docker Compose** (one container per hospital), **TLS** with a private CA, STRIDE threat model |
+| Engineering | `src/` package, typed YAML configs, CLI, 57 tests, CI (ruff + pytest), one-command reproduction |
 
 ## Threat models
 
@@ -447,16 +507,19 @@ src/fedsechealth/
     secure_aggregation.py   secure aggregation protocol (X25519, ChaCha20, Shamir)
   experiments.py   train / attack / trade-off / robustness / membership / secagg / demo pipelines
   plotting.py      figures (curves, trade-offs, galleries, noise sweeps, robustness heatmaps)
+  flower/          Flower ClientApp (hospital) and ServerApp (aggregation server)
   cli.py           command-line interface
 configs/           YAML experiment definitions
+deploy/            Flower app, TLS certificate script, local and Docker deployment
+docs/              threat model (STRIDE), GPU setup, figures
 scripts/           reproduction script
 tests/             pytest suite
 ```
 
 ## Roadmap
 
-Flower/Docker deployment with TLS between hospitals and server, a dashboard,
-and a technical report. See [ROADMAP.md](ROADMAP.md).
+SuperNode authentication and secure aggregation in the deployment, a
+dashboard, and a technical report. See [ROADMAP.md](ROADMAP.md).
 
 ## References
 
@@ -502,6 +565,9 @@ radios thoraciques, frottis sanguins) et les attaque sur deux fronts :
   d'entraînement** ; défenses : la **confidentialité différentielle** (par
   patient ou par hôpital) et l'**agrégation sécurisée** (vraie cryptographie :
   X25519, ChaCha20, partage de secret de Shamir).
+- **Déploiement réel :** le même code d'hôpital tourne avec **Flower**, un
+  conteneur **Docker** par hôpital et des échanges chiffrés en **TLS**,
+  analysés dans un [modèle de menace STRIDE](docs/THREAT_MODEL.md).
 - **Intégrité :** des **hôpitaux malveillants** empoisonnent le modèle commun
   (sabotage, backdoors cachées) ; défenses : l'**agrégation robuste** (médiane,
   moyenne tronquée, Krum, clipping de norme, FLTrust).
@@ -604,6 +670,22 @@ l'erreur relative est inférieure à 10 % (tabulaire) ou si le SSIM atteint 0,6
 calendrier que l'entraînement, donc chaque ε correspond au budget réellement
 dépensé par un hôpital.
 
+### Déploiement (v0.5)
+
+`src/fedsechealth/flower/` fait tourner la même logique d'hôpital dans un vrai
+déploiement Flower : un processus ou un conteneur par hôpital, qui n'échange
+que des poids de modèle avec le serveur, en gRPC chiffré par TLS (autorité de
+certification privée). Sur PneumoniaMNIST, 3 hôpitaux atteignent 0,806 de
+précision équilibrée en 10 rounds ; avec la DP, le budget ε de chaque hôpital
+s'accumule correctement d'un round à l'autre (7,94 pour une cible de 8).
+Choix de sécurité : TLS partout, aucune installation de paquets à l'exécution,
+conteneurs non-root en lecture seule, API de contrôle limitée à la machine
+locale. Voir `deploy/` et le [modèle de menace](docs/THREAT_MODEL.md).
+
+```bash
+bash deploy/run_local.sh
+```
+
 ### Démarrage rapide
 
 ```bash
@@ -618,8 +700,8 @@ uv run fedsechealth tradeoff -c configs/breast_cancer_iid.yaml
 
 ### Feuille de route
 
-Déploiement Flower/Docker avec TLS entre hôpitaux et serveur, tableau de
-bord et rapport technique. Voir [ROADMAP.md](ROADMAP.md).
+Authentification des hôpitaux et agrégation sécurisée dans le déploiement,
+tableau de bord et rapport technique. Voir [ROADMAP.md](ROADMAP.md).
 
 ## License
 
