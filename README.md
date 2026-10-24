@@ -58,18 +58,21 @@ corresponding formal budget ε. Numbers: SSIM to the real image (1 = identical).
 
 1. **Membership leaks, but calibrated attacks are needed to see it.** Five
    dermatology clinics (DermaMNIST); with local over-fitting (train 100 %,
-   test 73 %), offline **LiRA** identifies **4.4 %** of clinic 0's patients at
-   a 1 % false-positive rate (AUC 0.67), while the classic loss-threshold
-   attack barely beats chance at that rate (1.4 %). Per-example calibration
-   with shadow models is what makes the attack work.
+   test 74 %), offline **LiRA** reaches an AUC of **0.66 ± 0.02** and
+   identifies **3.0 % ± 1.8** of clinic 0's patients at a 1 % false-positive
+   rate, while the classic loss-threshold attack stays near chance at that
+   rate (1.8 %). Per-example calibration with shadow models is what makes the
+   attack work (3 seeds).
 2. **Sample-level DP removes the signal, at a real cost.** DP-SGD at ε = 8
-   brings the best attack back to chance (TPR 1.1 % at 1 % FPR) but, without
-   tuning, drops balanced accuracy on this imbalanced dataset from 0.51 to 0.31.
+   brings LiRA back to chance (AUC 0.52 ± 0.02) but drops balanced accuracy on
+   this imbalanced dataset from 0.50 to 0.29, *even after* tuning the DP
+   hyper-parameters on the validation split. On BloodMNIST the same tuning
+   recovers much more (see below): the cost of DP depends on the data.
 3. **Client-level DP is the wrong tool for a handful of hospitals.** With 5
    clinics, DP-FedAvg either gives no meaningful guarantee (σ = 0.1 → ε ≈ 2300)
    or destroys the model (σ = 1 → ε ≈ 49, balanced accuracy 0.16). Being added
    at the server, it also leaves each hospital's raw update exposed to that
-   server (3.4 % TPR on the local model).
+   server (5.0 % ± 3.3 TPR on the local model at σ = 0.1).
 4. **Secure aggregation hides individual updates for a modest cost.** The
    server only learns the sum: same model as FedAvg (0.789 vs. 0.787 balanced
    accuracy), exact recovery with 30 % of hospitals dropping out every round,
@@ -85,30 +88,31 @@ hospital out of ten is enough.</em></p>
 
 1. **One hospital is enough to plant a medical backdoor.** With FedAvg, a
    single malicious hospital out of 10 makes **99.8 %** of marked pneumonia
-   X-rays classified as normal, while accuracy on clean X-rays does not drop
-   (0.81 vs. 0.79 balanced accuracy): the backdoor is invisible to standard
+   X-rays classified as normal (± 0.3 over 5 seeds), while accuracy on clean X-rays does not drop
+   (0.80 vs. 0.79 balanced accuracy, 5 seeds): the backdoor is invisible to standard
    validation.
 2. **No aggregation rule wins everywhere.** Robust statistics stop crude
-   attacks (one sign-flipping lab drives FedAvg to chance level, 0.13, while
-   median / trimmed mean / Multi-Krum stay near 0.80), but **ALIE**, which
+   attacks (one sign-flipping lab drives FedAvg to chance level in 4 of 5 seeds,
+   while median / trimmed mean / Multi-Krum stay near 0.80), but **ALIE**, which
    hides inside the natural spread of honest updates, breaks them: with 4
-   attackers out of 10, median falls to 0.31 and Krum to 0.13 (it picks the
-   attacker's update in **100 %** of rounds), while plain FedAvg keeps 0.77.
+   attackers out of 10, median falls to 0.25 and Krum to 0.21 (it picks the
+   attacker's update in **100 %** of rounds), while plain FedAvg keeps 0.79
+   (means over 5 seeds).
    Choosing a defense means choosing a threat model.
 3. **Robustness has a price on heterogeneous data.** Without any attack,
    Krum keeps a single lab's update per round and drops BloodMNIST balanced
-   accuracy from 0.82 to 0.48; FLTrust (100 trusted samples) to 0.72.
-   Multi-Krum was the best compromise here (0.81 to 0.83 under every attack
+   accuracy from 0.82 to 0.49; FLTrust (100 trusted samples) to 0.75.
+   Multi-Krum was the best compromise here (0.78 to 0.82 under every attack
    with 2 attackers, backdoor success at baseline).
 4. **Defenses fail abruptly past their budget.** Trimmed mean (β = 0.2, i.e.
-   2 values trimmed per side) blocks the backdoor with 2 attackers (6 %) and
-   lets it through with 3 (99.8 %).
+   2 values trimmed per side) blocks the backdoor with 2 attackers (7 %) and
+   lets it through with 3 (99.9 %).
 
 **Privacy: curious server (v0.1 and v0.2)**
 
 1. **Gradients leak medical images almost perfectly.** Inverting Gradients
    reconstructs chest X-rays from a single-image gradient with median
-   **SSIM 0.98 / PSNR 36 dB** (100 % of 20 targets), and blood cell images
+   **SSIM 0.98 ± 0.002 / PSNR 34 dB** (100 % of 20 targets, in each of 5 seeds), and blood cell images
    with SSIM 0.72 (80 %).
 2. **Clipping alone does nothing.** Per-sample clipping only rescales the
    gradient; cosine-based attacks are scale-invariant (same SSIM 0.98).
@@ -119,16 +123,19 @@ hospital out of ten is enough.</em></p>
 4. **The diagnosis leaks before the image.** On BloodMNIST at σ = 0.01, the
    image is no longer recognisable (SSIM 0.37) but the cell type is still
    recovered for **95 %** of targets (chance: 12.5 %).
-5. **Federation pays off, DP costs a lot on images.** Five labs with skewed
-   BloodMNIST data: alone **0.545** balanced accuracy, federated **0.814**,
-   centralized 0.918. DP-SGD at ε = 16 drops the federated model to 0.690.
+5. **Federation pays off; DP on images needs its own tuning.** Five labs with
+   skewed BloodMNIST data: alone **0.545** balanced accuracy, federated
+   **0.82**, centralized 0.918. DP-SGD at ε = 16 first cost 0.13 (0.690);
+   with DP-specific hyper-parameters (larger batches, higher learning rate,
+   more rounds, chosen on the validation split) it costs 0.04 (**0.781**).
 
 ## Results in detail
 
 ### Membership inference and secure aggregation (v0.4)
 
 **Membership inference** (DermaMNIST, 5 clinics, 40 rounds × 5 local epochs,
-1,000 members of clinic 0 vs. 1,000 test patients, 16 LiRA shadow models):
+1,000 members of clinic 0 vs. 1,000 test patients, 16 LiRA shadow models;
+figures from seed 0, table over 3 seeds):
 
 <p align="center"><img src="docs/figures/mia_roc_dermamnist.png" width="820"></p>
 
@@ -139,18 +146,21 @@ the diagonal.
 
 <p align="center"><img src="docs/figures/mia_defenses_dermamnist.png" width="820"></p>
 
-| Defense | Formal guarantee | Balanced accuracy | Best TPR at 1 % FPR, global model | Best TPR at 1 % FPR, local model (server view) | LiRA AUC, global |
+| Defense | Formal guarantee | Balanced accuracy | LiRA AUC, global | Best TPR at 1 % FPR, global model | Best TPR at 1 % FPR, local model (server view) |
 |---|---|---|---|---|---|
-| None | none | 0.511 | **4.4 %** | 3.5 % | 0.67 |
-| Sample-level DP-SGD | ε = 8 per patient | 0.311 | 1.1 % | 1.4 % | 0.51 |
-| Sample-level DP-SGD | ε = 1 per patient | 0.168 | 1.1 % | 2.7 % | 0.50 |
-| Client-level DP-FedAvg, σ = 0.1 | ε ≈ 2300 per clinic | 0.409 | 2.1 % | 3.4 % | 0.57 |
-| Client-level DP-FedAvg, σ = 1 | ε ≈ 49 per clinic | 0.156 | 0.8 % | 1.0 % | 0.52 |
+| None | none | 0.497 ± 0.033 | **0.663 ± 0.016** | **3.0 % ± 1.8** | 3.8 % ± 2.5 |
+| Sample-level DP-SGD (tuned) | ε = 8 per patient | 0.289 ± 0.031 | 0.523 ± 0.024 | 1.6 % ± 1.0 | 1.7 % ± 0.8 |
+| Sample-level DP-SGD (tuned) | ε = 1 per patient | 0.216 ± 0.034 | 0.503 ± 0.018 | 1.3 % ± 0.1 | 1.2 % ± 0.8 |
+| Client-level DP-FedAvg, σ = 0.1 | ε ≈ 2300 per clinic | 0.434 ± 0.072 | 0.581 ± 0.031 | 2.2 % ± 2.0 | 5.0 % ± 3.3 |
+| Client-level DP-FedAvg, σ = 1 | ε ≈ 49 per clinic | 0.158 ± 0.030 | 0.515 ± 0.020 | 1.1 % ± 1.5 | 1.2 % ± 0.4 |
 
-*Random guessing gives 1 % TPR at 1 % FPR. A milder setting (30 rounds × 2 local
-epochs, train 92 % / test 72 %) gives the same picture with weaker attacks
-(LiRA 3.1 % TPR at 1 % FPR, AUC 0.56). The TPR values come from 1,000 targets, so
-differences of a few tenths of a percent are within noise.*
+*Mean ± 95 % CI over 3 seeds (two more are planned). Random guessing gives 1 %
+TPR at 1 % FPR; "best" takes the strongest of the four attacks, which slightly
+inflates the chance level. With 1,000 targets per side, a TPR at 1 % FPR rests
+on about ten false positives: it is a noisy estimate (an earlier single-seed run
+reported 4.4 %), whereas the AUC is stable. DP runs use the hyper-parameters
+selected on the validation split by `scripts/tune_dp.py` (batch 256, learning
+rate 0.5, 60 rounds of 1 local epoch).*
 
 **Secure aggregation** (PneumoniaMNIST, 10 hospitals, CNN with 420,802 parameters):
 
@@ -177,26 +187,27 @@ differences of a few tenths of a percent are within noise.*
 ### Malicious hospitals (v0.3)
 
 **Every attack against every defense** (BloodMNIST, 10 labs, Dirichlet α = 0.5,
-2 malicious, 20 rounds, mean of 2 seeds):
+2 malicious, 20 rounds, mean of 5 seeds; ± is the 95 % confidence interval):
 
 <p align="center"><img src="docs/figures/byzantine_heatmap_bloodmnist.png" width="820"></p>
 
 | Aggregator | No attack | Label flip | Sign flip ×5 | Gaussian | ALIE | Backdoor | Backdoor success |
 |---|---|---|---|---|---|---|---|
-| FedAvg | 0.818 | 0.798 | **0.278** | 0.793 | 0.821 | 0.804 | **97.0 %** |
-| Median | 0.797 | 0.766 | 0.769 | 0.803 | 0.802 | 0.812 | 13.0 % |
-| Trimmed mean (β = 0.2) | 0.807 | 0.783 | 0.786 | 0.817 | 0.806 | 0.827 | 20.6 % |
-| Krum | **0.482** | 0.537 | 0.579 | 0.579 | 0.796 | 0.579 | 0.3 % |
-| Multi-Krum | 0.824 | 0.810 | 0.830 | 0.830 | 0.813 | 0.830 | 2.3 % |
-| Norm clipping | 0.795 | 0.802 | 0.781 | 0.802 | 0.807 | 0.816 | 47.1 % |
-| FLTrust | 0.721 | 0.717 | 0.644 | 0.690 | 0.751 | 0.704 | 61.9 % |
+| FedAvg | 0.823 | 0.797 | 0.186 | 0.765 | 0.811 | 0.718 | 98.6 % ± 3.0 |
+| Median | 0.786 | 0.759 | 0.730 | 0.793 | 0.797 | 0.792 | 9.3 % ± 5.6 |
+| Trimmed mean (β = 0.2) | 0.807 | 0.781 | 0.758 | 0.813 | 0.799 | 0.814 | 16.1 % ± 7.3 |
+| Krum | 0.493 | 0.569 | 0.598 | 0.598 | 0.769 | 0.598 | 4.7 % ± 11.6 |
+| Multi-Krum | 0.808 | 0.781 | 0.820 | 0.820 | 0.818 | 0.820 | 1.8 % ± 1.7 |
+| Norm clipping | 0.808 | 0.798 | 0.758 | 0.795 | 0.807 | 0.818 | 61.2 % ± 49.0 |
+| FLTrust | 0.748 | 0.734 | 0.714 | 0.714 | 0.748 | 0.712 | 46.5 % ± 41.7 |
 
 *Balanced accuracy on the test set (8 cell types, chance = 0.125). Backdoor
 success: triggered test images (true class ≠ target) classified as the target;
-the rate for clean models is 1 to 2 % (22 % for Krum, whose weak model
-over-predicts the target class).*
+the rate for clean models is 1 to 3 % (16 % for Krum, whose weak model
+over-predicts the target class). Full table with confidence intervals for every
+cell: `results/consolidated/headline.md` (regenerated by `scripts/aggregate_seeds.py`).*
 
-**How many attackers can each defense take?** (one seed, 1 to 4 malicious of 10)
+**How many attackers can each defense take?** (1 to 4 malicious of 10, mean ± 95 % CI over 5 seeds)
 
 <p align="center">
 <img src="docs/figures/byzantine_sweep_alie.png" width="49%">
@@ -205,29 +216,33 @@ over-predicts the target class).*
 
 | Malicious labs | 0 | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|---|
-| ALIE vs. FedAvg | 0.836 | 0.847 | 0.843 | 0.842 | **0.767** |
-| ALIE vs. Median | 0.801 | 0.811 | 0.790 | 0.725 | **0.308** |
-| ALIE vs. Krum | 0.412 | 0.847 | 0.776 | 0.322 | **0.125** |
-| Sign flip vs. FedAvg | 0.836 | **0.133** | 0.125 | 0.125 | 0.125 |
-| Sign flip vs. Median | 0.801 | 0.784 | 0.765 | 0.760 | 0.458 |
-| Sign flip vs. Multi-Krum | 0.814 | 0.828 | 0.812 | 0.839 | 0.177 |
+| ALIE vs. FedAvg | 0.822 ± 0.025 | 0.811 ± 0.036 | 0.810 ± 0.029 | 0.807 ± 0.038 | 0.786 ± 0.041 |
+| ALIE vs. Median | 0.785 ± 0.030 | 0.794 ± 0.041 | 0.798 ± 0.027 | 0.652 ± 0.145 | 0.252 ± 0.092 |
+| ALIE vs. Krum | 0.507 ± 0.097 | 0.831 ± 0.023 | 0.770 ± 0.047 | 0.457 ± 0.142 | 0.214 ± 0.160 |
+| Sign flip vs. FedAvg | 0.822 ± 0.025 | 0.285 ± 0.373 | 0.188 ± 0.176 | 0.125 ± 0.000 | 0.125 ± 0.000 |
+| Sign flip vs. Median | 0.785 ± 0.030 | 0.769 ± 0.037 | 0.733 ± 0.072 | 0.680 ± 0.071 | 0.587 ± 0.115 |
+| Sign flip vs. Multi-Krum | 0.806 ± 0.019 | 0.815 ± 0.018 | 0.815 ± 0.014 | 0.810 ± 0.034 | 0.288 ± 0.278 |
 
 Krum is configured for the worst case it can tolerate (f = 3 for 10 clients).
-With one ALIE attacker, Krum's accuracy *rises* (0.41 to 0.85): the attacker's
+With one ALIE attacker, Krum's accuracy *rises* (0.51 to 0.83): the attacker's
 update is close to the benign mean, so selecting it every round is better than
-selecting one skewed lab.
+selecting one skewed lab. Sign flipping has a bimodal effect on FedAvg: with one
+attacker it collapses to chance in 4 of 5 seeds and survives in the fifth (0.82),
+hence the wide interval.
 
-**Medical backdoor** (PneumoniaMNIST, 10 hospitals, target "normal", boost ×5, 2 seeds):
+**Medical backdoor** (PneumoniaMNIST, 10 hospitals, target "normal", boost ×5, mean of 5 seeds):
 
 | Aggregator | Backdoor success, 1 / 2 / 3 malicious | Clean balanced accuracy (1 malicious) |
 |---|---|---|
-| FedAvg | **99.8 %** / 100 % / 99.8 % | 0.814 |
-| Median | 0.8 % / 3.1 % / 27.3 % | 0.782 |
-| Trimmed mean | 0.9 % / 5.9 % / **99.8 %** | 0.788 |
-| Krum | 0.2 % / 0.5 % / 0.6 % | 0.756 |
-| Multi-Krum | 0.3 % / 0.5 % / 0.6 % | 0.772 |
-| Norm clipping | 4.2 % / 82.4 % / 99.8 % | 0.779 |
-| FLTrust | 60.6 % / 76.2 % / 99.2 % | 0.734 |
+| FedAvg | 99.8 % / 99.9 % / 99.9 % | 0.797 |
+| Median | 0.9 % / 3.9 % / 26.0 % | 0.801 |
+| Trimmed mean | 0.9 % / 6.7 % / 99.9 % | 0.801 |
+| Krum | 0.4 % / 0.3 % / 0.6 % | 0.787 |
+| Multi-Krum | 0.4 % / 0.4 % / 0.5 % | 0.794 |
+| Norm clipping | 4.8 % / 85.2 % / 99.8 % | 0.796 |
+| FLTrust | 58.0 % / 84.8 % / 99.1 % | 0.752 |
+
+*FLTrust varies a lot between seeds (58.0 % ± 45.0 with one attacker).*
 
 The boosted backdoor update is large, so distance-based rules (Krum,
 Multi-Krum) exclude it every round; norm clipping and FLTrust neutralise the
@@ -240,16 +255,17 @@ boost but still let the poisoned *direction* through. A stealthier attacker
 
 <p align="center"><img src="docs/figures/pneumonia_noise_sweep.png" width="640"></p>
 
-| Defense | Formal ε | iDLG SSIM | DLG SSIM | Inverting Gradients SSIM (success) |
+| Defense | Formal ε | iDLG SSIM | DLG SSIM | Inverting Gradients SSIM, 5 seeds (success) |
 |---|---|---|---|---|
-| None | ∞ | 0.20 | 0.20 | **0.98** (100 %) |
-| Clipping only | ∞ | 0.02 | 0.12 | **0.98** (100 %) |
-| σ = 0.001 | 2.7 × 10⁸ | 0.02 | 0.13 | **0.97** (100 %) |
-| σ = 0.01 | 2.7 × 10⁶ | 0.02 | 0.07 | 0.69 (85 %) |
-| σ = 0.1 | 1.0 × 10⁴ | 0.02 | 0.04 | 0.18 (0 %) |
-| DP-SGD, σ = 0.91 | **8** | 0.01 | 0.03 | 0.15 (0 %) |
+| None | ∞ | 0.20 | 0.20 | **0.98** (100 %) | **0.98** ± 0.00 (100 %) 
+| Clipping only | ∞ | 0.02 | 0.12 | **0.98** (100 %) | **0.98** ± 0.00 (100 %) 
+| σ = 0.001 | 2.7 × 10⁸ | 0.02 | 0.13 | **0.97** (100 %) | **0.97** ± 0.00 (100 %) 
+| σ = 0.01 | 2.7 × 10⁶ | 0.02 | 0.07 | 0.69 (85 %) | **0.70** ± 0.02 (92 %) 
+| σ = 0.1 | 1.0 × 10⁴ | 0.02 | 0.04 | 0.18 (0 %) | **0.16** ± 0.04 (0 %) 
+| DP-SGD, σ = 0.91 | **8** | 0.01 | 0.03 | 0.15 (0 %) | **0.14** ± 0.02 (0 %) 
 
-*Success: SSIM ≥ 0.6. ε is computed with the RDP accountant for the hospital's
+*Success: SSIM ≥ 0.6. iDLG / DLG columns: seed 0; Inverting Gradients:
+mean ± 95 % CI over 5 seeds × 20 targets. ε is computed with the RDP accountant for the hospital's
 real training schedule (20 rounds, batch 64, δ = 1e-5).*
 
 **Harder settings for the attacker** (Inverting Gradients):
@@ -275,16 +291,21 @@ real training schedule (20 rounds, batch 64, δ = 1e-5).*
 
 **Federated training and DP cost** (BloodMNIST, 5 labs, Dirichlet α = 0.3, 3 seeds):
 
-<p align="center"><img src="docs/figures/bloodmnist_tradeoff.png" width="560"></p>
+<p align="center"><img src="docs/figures/bloodmnist_tradeoff_tuned.png" width="560"></p>
 
-| Setting | Balanced accuracy | Inverting Gradients success |
-|---|---|---|
-| Each lab alone (mean) | 0.545 | n/a |
-| Federated, no DP | **0.814 ± 0.017** | 70 % |
-| Federated, DP ε = 16 | 0.690 ± 0.010 | 0 % |
-| Federated, DP ε = 4 | 0.678 ± 0.010 | 0 % |
-| Federated, DP ε = 1 | 0.607 ± 0.013 | 0 % |
-| Centralized (pooled data, not private) | 0.918 | n/a |
+| Setting | Balanced accuracy, non-private hyper-parameters | Balanced accuracy, DP-tuned hyper-parameters | Inverting Gradients success |
+|---|---|---|---|
+| Each lab alone (mean) | 0.545 | n/a | n/a |
+| Federated, no DP | **0.814 ± 0.017** | 0.819 ± 0.017 | 70 to 80 % |
+| Federated, DP ε = 16 | 0.690 ± 0.010 | **0.781 ± 0.008** | 0 % |
+| Federated, DP ε = 4 | 0.678 ± 0.010 | **0.721 ± 0.022** | 0 % |
+| Federated, DP ε = 1 | **0.607 ± 0.013** | 0.510 ± 0.019 | 0 % |
+| Centralized (pooled data, not private) | 0.918 | n/a | n/a |
+
+*Mean ± std over 3 seeds. The DP-tuned column uses the configuration selected at
+ε = 8 on the validation split (batch 256, learning rate 0.5, 60 rounds of 1 local
+epoch, `scripts/tune_dp.py`). It helps at ε = 4 and 16 but hurts at ε = 1, where
+60 rounds accumulate too much noise: DP hyper-parameters depend on the budget.*
 
 ### Tabular (v0.1, Breast Cancer Wisconsin)
 
@@ -393,7 +414,7 @@ Security choices, all motivated in the [threat model](docs/THREAT_MODEL.md):
   size as without DP); the utility cost reported here is an upper bound.
 - For ε = 0.5 on tabular data, Opacus warns that the RDP bound is loose: the
   reported ε is conservative.
-- Poisoning: 2 seeds for the grids and 1 for the sweeps; attackers are not
+- Poisoning: 5 seeds; attackers are not
   adaptive (they ignore which defense is deployed), and the backdoor uses a
   large boost that distance-based rules detect easily. Stealthier, defense-aware
   attacks would lower the robust aggregators' numbers.
@@ -576,12 +597,14 @@ radios thoraciques, frottis sanguins) et les attaque sur deux fronts :
 
 1. **L'appartenance fuit, mais il faut une attaque calibrée pour le voir.**
    Avec cinq cliniques de dermatologie et un sur-apprentissage local (100 %
-   en entraînement, 73 % en test), **LiRA** identifie **4,4 %** des patients
-   de la clinique 0 pour 1 % de faux positifs (AUC 0,67), là où l'attaque
-   classique par seuil de perte fait à peine mieux que le hasard (1,4 %).
+   en entraînement, 74 % en test), **LiRA** atteint une AUC de 0,66 ± 0,02 et
+   identifie **3,0 % ± 1,8** des patients de la clinique 0 pour 1 % de faux
+   positifs, là où l'attaque classique par seuil de perte reste proche du
+   hasard (1,8 %), sur 3 graines.
 2. **La DP par patient supprime le signal, mais coûte cher.** À ε = 8,
    l'attaque retombe au niveau du hasard, et la précision équilibrée chute de
-   0,51 à 0,31 sur ce jeu déséquilibré, sans réglage spécifique.
+   0,50 à 0,29 sur ce jeu déséquilibré, même après réglage des hyperparamètres
+   de la DP sur la partition de validation.
 3. **La DP par hôpital n'est pas adaptée à quelques hôpitaux.** Avec 5
    cliniques, elle ne garantit rien (σ = 0,1 → ε ≈ 2300) ou détruit le modèle
    (σ = 1 → ε ≈ 49). Ajoutée côté serveur, elle ne protège pas non plus les

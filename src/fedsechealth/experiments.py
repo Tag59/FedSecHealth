@@ -27,7 +27,7 @@ from .config import ExperimentConfig
 from .data import ClientData, FederatedDataset, load_federated_dataset
 from .defenses import Aggregator, AggregatorConfig
 from .defenses.secure_aggregation import SecAggClient, decode, secure_sum
-from .fl import Hospital, run_centralized, run_federated, run_local_only
+from .fl import FLConfig, Hospital, run_centralized, run_federated, run_local_only
 from .models import build_model
 from .plotting import (
     plot_gallery,
@@ -58,6 +58,14 @@ def _model_fn(fds: FederatedDataset, cfg: ExperimentConfig) -> Callable[[], nn.M
 
 def _out(cfg: ExperimentConfig) -> Path:
     return Path(cfg.output_dir) / cfg.name
+
+
+def with_dp(cfg: ExperimentConfig, fl: FLConfig, epsilon: float) -> FLConfig:
+    """FL config for a DP-SGD run at ``epsilon``, with the DP overrides of ``cfg.dp_fl``."""
+    o = dict(cfg.dp_fl)
+    clip = o.pop("max_grad_norm", fl.dp.max_grad_norm)
+    dp = replace(fl.dp, enabled=True, target_epsilon=epsilon, max_grad_norm=clip)
+    return replace(fl, dp=dp, **o)
 
 
 def _metric(fds: FederatedDataset) -> str:
@@ -300,8 +308,8 @@ def experiment_tradeoff(cfg: ExperimentConfig, log: Log = print) -> dict:
         accs = []
         for seed in cfg.seeds:
             set_seed(seed)
-            dp = replace(cfg.fl.dp, enabled=eps is not None, target_epsilon=eps or 0.0)
-            fl_cfg = replace(cfg.fl, seed=seed, dp=dp)
+            base = replace(cfg.fl, seed=seed)
+            fl_cfg = base if eps is None else with_dp(cfg, base, eps)
             fds = _dataset(cfg, seed)
             metric = _metric(fds)
             _, hist = run_federated(fds, _model_fn(fds, cfg), fl_cfg, device)
@@ -489,8 +497,7 @@ def _membership_defenses(cfg: ExperimentConfig, n_client_samples: int):
     m, f = cfg.membership, cfg.fl
     yield "none", f, None, None
     for eps in m.sample_dp_epsilons:
-        dp = replace(f.dp, enabled=True, target_epsilon=eps)
-        yield f"sample-DP eps={eps:g}", replace(f, dp=dp), None, None
+        yield f"sample-DP eps={eps:g}", with_dp(cfg, f, eps), None, None
     for z in m.client_dp_noise:
         agg = AggregatorConfig("dp_fedavg", clip_norm=m.client_dp_clip, noise_multiplier=z)
         eps = epsilon_for(z, 1.0, f.rounds, f.dp.target_delta)

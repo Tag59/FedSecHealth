@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 from opacus import PrivacyEngine
+from opacus.utils.batch_memory_manager import BatchMemoryManager
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -41,6 +42,7 @@ class FLConfig:
     rounds: int = 20
     local_epochs: int = 1
     batch_size: int = 32
+    max_physical_batch_size: int = 64  # DP-SGD memory cap (per-sample gradients)
     lr: float = 0.1
     model: str = "auto"  # auto | mlp | cnn | lenet
     hidden: tuple[int, ...] = (64, 32)
@@ -65,6 +67,7 @@ class Hospital:
         self.device = device
         self.dp = cfg.dp
         self.local_epochs = cfg.local_epochs
+        self.max_physical_batch_size = cfg.max_physical_batch_size
         self.loss_fn = nn.CrossEntropyLoss()
 
         dataset = TensorDataset(torch.from_numpy(data.x), torch.from_numpy(data.y))
@@ -99,14 +102,28 @@ class Hospital:
         self.base_model.load_state_dict(global_state)
         self.model.train()
         for _ in range(self.local_epochs):
-            for x, y in self.loader:
-                if len(y) == 0:  # Poisson sampling (DP) can yield empty batches
-                    continue
-                x, y = x.to(self.device), y.to(self.device)
-                self.optimizer.zero_grad()
-                self.loss_fn(self.model(x), y).backward()
-                self.optimizer.step()
+            if self.privacy_engine is None:
+                self._epoch(self.loader)
+                continue
+            # DP-SGD stores one gradient per sample: split each logical (Poisson) batch
+            # into physical chunks; Opacus only steps once the logical batch is complete,
+            # so the update and the privacy accounting are unchanged.
+            with BatchMemoryManager(
+                data_loader=self.loader,
+                max_physical_batch_size=self.max_physical_batch_size,
+                optimizer=self.optimizer,
+            ) as loader:
+                self._epoch(loader)
         return {k: v.detach().clone() for k, v in self.base_model.state_dict().items()}
+
+    def _epoch(self, loader) -> None:
+        for x, y in loader:
+            if len(y) == 0:  # Poisson sampling (DP) can yield empty batches
+                continue
+            x, y = x.to(self.device), y.to(self.device)
+            self.optimizer.zero_grad()
+            self.loss_fn(self.model(x), y).backward()
+            self.optimizer.step()
 
     def epsilon(self) -> float:
         if self.privacy_engine is None:

@@ -51,6 +51,13 @@ Each milestone is a self-contained, presentable release.
 - [ ] SuperNode authentication (per-hospital keys)
 - [ ] Secure aggregation inside the Flower deployment (Flower SecAgg+)
 
+## v0.5.1: Consolidated results (current)
+- [x] 5 seeds with 95 % confidence intervals for gradient inversion, backdoor, aggregator grid and sweeps
+- [x] DP-SGD hyper-parameters tuned on the validation split (`scripts/tune_dp.py`), `dp_fl` config section
+- [x] Memory-safe DP-SGD (Opacus BatchMemoryManager)
+- [x] Membership inference with tuned DP over 3 seeds
+- [ ] Membership inference seeds 3 and 4
+
 ## v0.6: Presentation
 - [ ] Streamlit dashboard: run scenarios, browse results and reconstructions
 - [ ] Technical report (≈8 pages, paper style) + slide deck for interviews
