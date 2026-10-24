@@ -98,6 +98,17 @@ class ExperimentConfig:
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     membership: MembershipConfig = field(default_factory=MembershipConfig)
     secagg: SecAggConfig = field(default_factory=SecAggConfig)
+    # FL hyper-parameters used whenever DP-SGD is on (DP needs its own tuning, see
+    # scripts/tune_dp.py): any of batch_size, lr, local_epochs, rounds, max_grad_norm.
+    dp_fl: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        allowed = {"batch_size", "lr", "local_epochs", "rounds", "max_grad_norm"}
+        unknown = set(self.dp_fl) - allowed
+        if unknown:
+            raise ValueError(
+                f"Unknown keys for dp_fl: {sorted(unknown)}; allowed: {sorted(allowed)}"
+            )
 
 
 def _build(cls, data: dict[str, Any]):

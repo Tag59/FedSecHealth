@@ -29,3 +29,10 @@ membership:
   sample_dp_epsilons: [1, 8]
   client_dp_noise: [0.1, 1.0]
   client_dp_clip: 1.0
+
+# DP-specific hyper-parameters, tuned on the validation split (scripts/tune_dp.py, epsilon = 8)
+dp_fl:
+  batch_size: 256
+  lr: 0.5
+  local_epochs: 1
+  rounds: 60

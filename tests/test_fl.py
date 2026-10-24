@@ -80,3 +80,17 @@ def test_config_overrides():
     )
     assert cfg.fl.rounds == 3 and cfg.fl.dp.enabled and cfg.attack.n_targets == 2
     assert cfg.data.name == "bloodmnist"
+
+
+def test_dp_specific_hyperparameters_only_apply_to_dp_runs():
+    import pytest
+
+    from fedsechealth.experiments import with_dp
+
+    cfg = load_config(None, {"dp_fl": {"batch_size": 256, "lr": 0.5, "max_grad_norm": 2.0}})
+    dp_fl = with_dp(cfg, cfg.fl, epsilon=4.0)
+    assert dp_fl.batch_size == 256 and dp_fl.lr == 0.5
+    assert dp_fl.dp.enabled and dp_fl.dp.target_epsilon == 4.0 and dp_fl.dp.max_grad_norm == 2.0
+    assert cfg.fl.batch_size != 256 and not cfg.fl.dp.enabled  # the non-private config is untouched
+    with pytest.raises(ValueError):
+        load_config(None, {"dp_fl": {"momentum": 0.9}})
